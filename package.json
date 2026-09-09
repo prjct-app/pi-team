@@ -1,0 +1,36 @@
+{
+  "name": "@prjct-app/pi-team",
+  "version": "0.1.0",
+  "description": "Local opt-in messaging between independent Pi sessions",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "team", "agents", "local"],
+  "pi": { "extensions": ["./index.ts"] },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs"
+  },
+  "engines": { "node": ">=22.19.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "dependencies": { "proper-lockfile": "4.1.2" },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/node": "^22.19.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "tsx": "^4.20.0",
+    "typebox": "1.3.7",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/prjct-app/pi-team.git" },
+  "homepage": "https://github.com/prjct-app/pi-team#readme",
+  "bugs": { "url": "https://github.com/prjct-app/pi-team/issues" },
+  "publishConfig": { "access": "public" },
+  "files": ["index.ts", "src", "docs", "README.md", "CONTRIBUTING.md", "LICENSE"]
+}
