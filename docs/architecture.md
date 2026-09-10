@@ -93,22 +93,6 @@ Consequences worth knowing:
   same conversation are stale but cannot be retracted, which is why each one is
   kept small.
 
-## Task-boundary compaction
-
-Once a result is safely persisted, the extension calls Pi's `ctx.compact()`. That
-session claims no other peer message while compaction runs. The instructions
-preserve user-authored goals and constraints, team identity, unresolved
-requester → assignee relationships, outcomes, blockers, files, tests, and next
-actions, and discard verbose tool output, duplicated payloads, completed traces,
-and private reasoning.
-
-Compaction changes model context, not extension registration or mailbox state:
-`/team` commands and tools stay available, and each terminal remains an
-independent Pi session rather than a spawned subagent. Pi still applies its
-configured `keepRecentTokens`. If compaction fails, the TUI warns and reception
-continues. User takeover skips it, because the turn is no longer an isolated team
-task.
-
 ## Recovery and guarantees
 
 Ownership tokens fence out replaced sessions. Pending messages survive
@@ -120,12 +104,12 @@ no exactly-once guarantee** for filesystem changes or model actions: a crash aft
 claiming but before starting also leaves an interrupted task. If storage cannot
 record a result, reception pauses and reports an error.
 
-Membership, pause state, and pending compaction are recorded in Pi session
-entries. Resuming the same session rejoins; `/new` and `/fork` do not inherit
-membership. Before claiming work the extension records that restoration must
-pause, without pausing the live session, so an abrupt process death during a task
-restores paused and requires `/team resume`. A crash just before a claim can
-conservatively require resume too.
+Membership and pause state are recorded in Pi session entries. Resuming the same
+session rejoins; `/new` and `/fork` do not inherit membership. Before claiming
+work the extension records that restoration must pause, without pausing the live
+session, so an abrupt process death during a task restores paused and requires
+`/team resume`. A crash just before a claim can conservatively require resume too.
+Legacy pending-compaction fields from earlier releases are ignored on restore.
 
 Directory watchers provide prompt delivery; polling every two seconds recovers
 missed notifications. Both run only for joined interactive sessions and close on
@@ -144,7 +128,7 @@ shutdown. Transient storage errors are reported but never pause reception.
 | Active recipient | Wait until fully idle; no steering between tools |
 | Offline recipient | Persist to a known alias until it rejoins |
 | Approval | Never supplied by peers; local policies always win |
-| Coordination | Direct messages and bulk check-ins; no task board or worktree manager |
+| Coordination | Direct messages and bulk check-ins; no task board, automatic compaction, or worktree manager |
 | Scope | Local disks only: no network filesystems, cross-machine transport, or native Windows |
 
 Not provided: file ownership between agents, a sandbox, an authorization system,
