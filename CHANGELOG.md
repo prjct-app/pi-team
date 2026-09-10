@@ -1,3 +1,9 @@
+## [0.3.0](https://github.com/prjct-app/pi-team/compare/v0.2.0...v0.3.0) (2026-09-10)
+
+### Features
+
+* **tui:** show unresolved request flow ([d07be93](https://github.com/prjct-app/pi-team/commit/d07be93c869dfc01caeae597ae82390024552855))
+
 ## [0.2.0](https://github.com/prjct-app/pi-team/compare/v0.1.3...v0.2.0) (2026-09-10)
 
 ### Features
