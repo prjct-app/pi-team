@@ -1,3 +1,5 @@
+## [0.4.3](https://github.com/prjct-app/pi-team/compare/v0.4.2...v0.4.3) (2026-09-10)
+
 ## [0.4.2](https://github.com/prjct-app/pi-team/compare/v0.4.1...v0.4.2) (2026-09-10)
 
 ## [0.4.1](https://github.com/prjct-app/pi-team/compare/v0.4.0...v0.4.1) (2026-09-10)
