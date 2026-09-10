@@ -10,6 +10,7 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 - Concurrent mailbox storage: many agents write at the same time without lock failures.
 - Automatic delivery when a teammate is idle; pending work survives restarts.
 - Automatic results verified against the original request, plus periodic review turns that chase unresolved work.
+- Automatic task-boundary compaction before the next team turn, keeping independent sessions focused and reusable.
 - Live request-flow widget showing requester → assignee relationships, folded transcript previews, and one `/team` command surface.
 
 ## Install
@@ -64,9 +65,11 @@ identities. Messages come in three kinds:
 Every message moves through visible states: `pending` (queued), `processing`
 (claimed by a live session), `completed` / `interrupted` (settled), and `seen`
 (notes already shown). The lifecycle of a request is: queued → claimed when the
-recipient is idle → worked on → result delivered to the emitter → the emitter
-verifies it against the original request and, if anything is missing, replies
-in the same thread with what remains to finish.
+recipient is idle → worked on → result persisted and made available to the
+emitter → the recipient compacts before accepting another team turn → the
+emitter verifies the result against the original request and, if anything is
+missing, replies in the same thread with what remains to finish → the emitter
+compacts that result-review turn before accepting another team turn.
 
 ### Status widget
 
@@ -80,7 +83,7 @@ request flow (requester → assignee)
 • pm → reviewer (busy) · active · Review authentication changes
 ```
 
-The header state is `connected`, `working`, `paused`, or `select a model`. Its
+The header state is `connected`, `working`, `compacting`, `paused`, or `select a model`. Its
 pending count covers everything addressed to you that is still queued. The flow
 lines identify the task subject, assignee presence, and whether the request is
 queued or active. The widget shows up to five relationships; `/team status`
@@ -163,7 +166,8 @@ not "task completed". Tools and manual commands use the same mailbox validation.
 ## Delivery and results
 
 Requests and correlated results start a new turn only when the recipient is idle,
-has a selected model, no pending user messages or open extension prompt, and an empty editor.
+has a selected model, no pending user messages or open extension prompt, an empty editor,
+and no task-boundary compaction in progress.
 A second readiness check handles a user starting work during a filesystem read.
 No running tool is interrupted. Notes are transcript-only; view them with
 `/team inbox`. They are not injected into the model's context.
@@ -191,6 +195,25 @@ result never produces another automatic reply. Delivered results quote the
 original request, and agents are instructed to verify the deliverable against it
 and reply in-thread with exactly what is missing when a result is incomplete or
 failed. Notes/acknowledgements never wake a model.
+
+### Task-boundary compaction
+
+After a request or correlated result-review turn settles and its mailbox outcome
+is safely persisted, the extension calls Pi's documented `ctx.compact()` API.
+That session claims no other peer message while compaction is running. The focused
+instructions preserve user-authored goals and constraints, team identity,
+unresolved requester → assignee relationships, concrete outcomes, blockers,
+files, tests, and next actions while asking Pi to discard verbose tool output,
+duplicated task payloads, completed traces, and private reasoning.
+
+Compaction changes model context, not extension registration or mailbox state:
+`/team` commands and team tools remain available, and each terminal continues as
+an independent Pi session rather than a spawned subagent. Pi still applies its
+configured `keepRecentTokens`, so this is compaction rather than a hard context
+reset. It uses a summarization model call now to reduce repeated context on later
+tasks. If compaction fails, the TUI warns and reception continues; Pi's normal
+context-threshold compaction remains available. User takeover skips this automatic
+step because the resulting turn is no longer an isolated team task.
 
 While you have emitted requests that stay unresolved past five minutes, an
 automatic review turn asks your agent every minute to chase the responsible
@@ -270,15 +293,18 @@ can also leave an interrupted task. There is no exactly-once guarantee for files
 changes or model actions. If storage cannot record a result, reception pauses and
 reports an error; review before retrying.
 
-Membership and pause state are recorded in Pi session entries. Resuming the same
-session can rejoin; `/new` and `/fork` do not inherit membership. Explicit leave
-clears restoration. Before attempting to claim work, the extension records that
-restoration must pause, without pausing the live session. Successful result
-persistence clears this recovery-only pause; failures and interruptions retain it.
-Thus even an abrupt process death restores paused and requires `/team resume`
-before pending work starts. A crash just before a claim can conservatively require
-resume too. History and pending work remain in the team until explicitly managed
-outside this prototype.
+Membership, pause state, and pending task-boundary compaction are recorded in Pi
+session entries. Resuming the same session can rejoin; `/new` and `/fork` do not
+inherit membership. Explicit leave clears restoration. Before attempting to claim
+work, the extension records that restoration must pause, without pausing the live
+session. Successful result persistence clears this recovery-only pause; failures
+and interruptions retain it. If shutdown interrupts a post-task compaction, the
+same session retries compaction before claiming queued peer work.
+
+Thus even an abrupt process death during a task restores paused and requires
+`/team resume` before pending work starts. A crash just before a claim can
+conservatively require resume too. History and pending work remain in the team
+until explicitly managed outside this prototype.
 
 Local disks only: shared network filesystems, containers with separate home
 directories, cross-machine transport, and native Windows are not supported here.
@@ -306,6 +332,7 @@ When switching from GitHub to npm, remove the Git installation first, then insta
 | --- | --- |
 | A request stays queued | Check the live request-flow widget or `/team status` to identify its requester, assignee, subject, and assignee presence. The recipient may be busy, paused, offline, missing a selected model, or typing in its editor. After five minutes, automatic review turns chase the teammate or surface the blockage to you. |
 | `Team auto-turn limit reached` | Five automatic peer turns ran without user input. Review the transcript, then `/team resume`. |
+| Automatic context compaction failed | The mailbox result was already persisted. Reception continues, and Pi can retry through its normal threshold compaction or `/compact`. |
 | `Membership expired or replaced` | Another live session took your alias, or your membership was fenced out. Rejoin with `/team join <team> <alias>`; choose a new alias if the old one is in use. |
 | `Recipient inbox full` / `Sender inbox full` | Fifty unsettled deliveries per member, with one slot reserved per outstanding request. Let the teammate drain its queue; notes are exempt from reply reservations. |
 | `Team history full (500 records)` | The team is at capacity; history is never silently deleted. Create a fresh team and rejoin. |
@@ -314,7 +341,7 @@ When switching from GitHub to npm, remove the Git installation first, then insta
 
 ## Package and API documentation
 
-Uses public commands, tools, lifecycle events, custom messages, and persisted session entries. Storage is self-contained (no runtime dependencies); Pi libraries remain peer dependencies.
+Uses public commands, tools, lifecycle events, custom messages, persisted session entries, and `ExtensionContext.compact()`. Storage is self-contained (no runtime dependencies); Pi libraries remain peer dependencies.
 
 See [Package structure and compatibility](docs/package.md) for the manifest, dependency policy, shipped resources, and official references. This package follows the [official Pi package guide](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md) and [extension API guide](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/extensions.md) for the tested version.
 

@@ -26,13 +26,13 @@ Our user-selected scope differs deliberately:
 | Offline recipient | Persist to a known alias until rejoin |
 | Results | Automatic last-text reply to requests, quoted against the original request |
 | Approval | Never supplied by peers; preserve local policies |
-| Coordination | Messages only; no task board or worktree manager |
+| Coordination | Messages plus task-boundary context compaction; no task board or worktree manager |
 | Limits | Bounded conversations, inboxes and automatic turns |
 | UI | Existing Pi loader plus a compact requester → assignee flow widget, `/team status`, and expandable messages |
 
 Pi APIs used: `registerCommand`, `registerTool`, `sendMessage`, custom entry/message
-renderers, `setWidget`, `getEditorText`, `isIdle`, `hasPendingMessages`, session
-lifecycle, UI prompt events, `tool_result`, `message_end`, and `agent_settled`.
+renderers, `setWidget`, `getEditorText`, `isIdle`, `hasPendingMessages`, `compact`,
+session lifecycle, UI prompt events, `tool_result`, `message_end`, and `agent_settled`.
 No monkey-patching of Pi internals, shell evaluation of peer messages, forwarding
 of thinking, or modifications to existing local extensions are required.
 

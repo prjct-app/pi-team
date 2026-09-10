@@ -29,6 +29,7 @@ test('Pi commands connect peers; a request waits while working, typing, or showi
   await be.emit('ui_prompt_end');
   await until(() => be.received.length === 1);
   assert.match(be.received[0].content, /another agent, not the user/);
+  assert.match(be.received[0].content, /focused task for this independent session/);
   assert.match(be.received[0].content, /Implement login/);
   await be.emit('tool_result', { toolName: 'edit', input: { path: 'src/login.ts' }, isError: false });
   await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [
@@ -77,10 +78,84 @@ test('an aborted task pauses reception, and a result does not cause an automatic
   await until(() => pm.received.length === 1);
   await pm.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Task was interrupted' }] } });
   pm.busy(false); await pm.emit('agent_settled');
+  assert.equal(pm.compactions.length, 1, 'Correlated result-review turns are compacted too');
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(be.received.length, 1);
   await be.command('resume'); await until(() => be.received.length === 2);
   assert.match(be.received[1].content, /Second task/);
+});
+
+test('completed team turns compact before the next task while commands remain available', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-compaction-'));
+  const pm = harness(root, 'pm');
+  const be = harness(root, 'backend', [], { holdCompaction: true });
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await be.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  be.busy(true);
+  await pm.command('send backend First focused task');
+  await pm.command('send backend Second focused task');
+  be.busy(false); await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'First task done' }] } });
+  be.busy(false); await be.emit('agent_settled');
+
+  assert.equal(be.compactions.length, 1);
+  assert.equal(be.entries.filter(entry => entry.customType === 'team-membership').at(-1).data.needsCompaction, true);
+  assert.match(be.compactions[0].customInstructions ?? '', /Preserve user-authored goals/);
+  assert.match(be.compactions[0].customInstructions ?? '', /untrusted task data/);
+  await until(() => be.widgets.get('team')?.[0]?.includes('compacting') ?? false);
+  const status = JSON.parse((await be.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+  assert.equal(status.compacting, true);
+  await be.command('members');
+  assert.ok(be.notices.some(notice => /backend/.test(notice)), 'Team commands remain usable during compaction');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(be.received.length, 1, 'The next peer task stays queued during compaction');
+
+  be.completeCompaction();
+  assert.equal(be.entries.filter(entry => entry.customType === 'team-membership').at(-1).data.needsCompaction, false);
+  await until(() => be.received.length === 2);
+  assert.match(be.received[1].content, /Second focused task/);
+
+  await pm.command('send backend Third focused task');
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Second task done' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  assert.equal(be.compactions.length, 2);
+  be.completeCompaction(new Error('summary unavailable'));
+  await until(() => be.received.length === 3);
+  assert.ok(be.notices.some(notice => /compaction.*failed.*summary unavailable/i.test(notice)));
+});
+
+test('an interrupted compaction is retried on session restore before queued work', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-compaction-restore-'));
+  const pm = harness(root, 'pm');
+  const be = harness(root, 'backend', [], { holdCompaction: true });
+  let resumed: ReturnType<typeof harness> | undefined;
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await resumed?.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  be.busy(true);
+  await pm.command('send backend Finish before restart');
+  await pm.command('send backend Wait until restored compaction');
+  be.busy(false); await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Finished' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  assert.equal(be.compactions.length, 1);
+  await be.emit('session_shutdown', { reason: 'reload' });
+
+  resumed = harness(root, 'backend', be.entries, { holdCompaction: true });
+  await resumed.emit('session_start', { reason: 'reload' });
+  await until(() => resumed!.compactions.length === 1);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(resumed.received.length, 0, 'Restored sessions compact before claiming queued work');
+  resumed.completeCompaction();
+  await until(() => resumed!.received.length === 1);
+  assert.match(resumed.received[0].content, /Wait until restored compaction/);
 });
 
 test('automatic work pauses after five turns and requires an explicit resume', async (t) => {
@@ -115,6 +190,7 @@ test('user takeover does not forward unrelated user work as a peer result', asyn
   await until(() => pm.received.length === 1);
   assert.doesNotMatch(pm.received[0].content, /Private note contents/);
   assert.match(pm.received[0].content, /User took over/);
+  assert.equal(be.compactions.length, 0, 'Mixed user work is not compacted as an isolated team task');
 });
 
 test('reload restores the same paused membership but a fork does not inherit it', async (t) => {

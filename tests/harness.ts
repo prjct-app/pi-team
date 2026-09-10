@@ -2,7 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { installTeam } from '../src/index.ts';
 
 type Handler = (event: any, ctx: any) => unknown;
-export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number } = {}) {
+type CompactionCall = { customInstructions?: string; onComplete?: () => void; onError?: (error: Error) => void };
+export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; holdCompaction?: boolean } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
@@ -11,6 +12,8 @@ export function harness(root: string, session: string, saved: any[] = [], option
   const notices: string[] = [];
   const renderers = new Map<string, any>();
   const widgets = new Map<string, string[]>();
+  const compactions: CompactionCall[] = [];
+  const heldCompactions: CompactionCall[] = [];
   let idle = true;
   let pending = false;
   let editor = '';
@@ -19,6 +22,11 @@ export function harness(root: string, session: string, saved: any[] = [], option
     cwd: `/worktrees/${session}`, mode: 'tui', hasUI: true,
     get model() { return model; },
     isIdle: () => idle, hasPendingMessages: () => pending,
+    compact: (call: CompactionCall) => {
+      compactions.push(call);
+      if (options.holdCompaction) heldCompactions.push(call);
+      else queueMicrotask(() => call.onComplete?.());
+    },
     sessionManager: { getSessionId: () => session, getBranch: () => entries },
     ui: { notify: (s: string) => notices.push(s), getEditorText: () => editor,
       setWidget: (name: string, value: undefined | string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] })) => {
@@ -43,7 +51,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000 });
   return {
-    received, notices, entries, tools, commands, renderers, widgets,
+    received, notices, entries, tools, commands, renderers, widgets, compactions,
     async emit(name: string, event: unknown = {}) {
       for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
     },
@@ -53,6 +61,12 @@ export function harness(root: string, session: string, saved: any[] = [], option
     pending(value: boolean) { pending = value; },
     editor(value: string) { editor = value; },
     modelAvailable(value: boolean) { model = value ? { id: 'simulated-model' } : undefined; },
+    completeCompaction(error?: Error) {
+      const call = heldCompactions.shift();
+      if (!call) throw new Error('No held compaction');
+      if (error) call.onError?.(error);
+      else call.onComplete?.();
+    },
   };
 }
 export async function until(check: () => boolean | Promise<boolean>, ms = 5000): Promise<void> {
