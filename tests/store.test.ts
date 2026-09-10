@@ -16,7 +16,11 @@ test('publications are atomic, revisioned, and verified by content hash', async 
   assert.equal(first.revision, 1);
   const second = await publish(path, 1, { count: 2 }, envelope, { maxBytes: MAX });
   assert.equal(second.revision, 2);
-  assert.deepEqual(await readRecord(path, envelope, MAX), { revision: 2, payload: { count: 2 } });
+  const read = await readRecord(path, envelope, MAX);
+  assert.equal(read?.revision, 2);
+  assert.deepEqual(read?.payload, { count: 2 });
+  // Carried, not recomputed: the parser needed it for the content hash anyway.
+  assert.equal(read?.payloadJson, JSON.stringify(read?.payload), 'The canonical serialization travels with the record');
   // History revisions share bytes with the record at their publication time.
   assert.deepEqual((await readRecord(join(root, 'revisions', '1.json'), envelope, MAX))?.payload, { count: 1 });
   await assert.rejects(publish(path, 1, { count: 3 }, envelope, { maxBytes: MAX }), /current revision is 2/);
@@ -93,4 +97,14 @@ test('a non-durable atomic write still replaces the record whole', async (t) => 
   assert.equal(await readFile(path, 'utf8'), '{"b":2}', 'The last write is visible in full');
   const left = (await readdir(join(root, 'presence'))).filter(name => name.endsWith('.tmp'));
   assert.deepEqual(left, [], 'No temporary file survives a successful write');
+});
+
+test('a precomputed payload serialization publishes byte-identical records', async (t) => {
+  const rootA = await mkdtemp(join(tmpdir(), 'pi-team-json-a-'));
+  const rootB = await mkdtemp(join(tmpdir(), 'pi-team-json-b-'));
+  t.after(() => Promise.all([rm(rootA, { recursive: true, force: true }), rm(rootB, { recursive: true, force: true })]));
+  const payload = { version: 1, items: [{ id: 'a', body: 'ñ→"\\' }], when: 1.5e3 };
+  await publish(join(rootA, 'state.json'), 0, payload, envelope, { maxBytes: MAX });
+  await publish(join(rootB, 'state.json'), 0, payload, envelope, { maxBytes: MAX, payloadJson: JSON.stringify(payload) });
+  assert.equal(await readFile(join(rootA, 'state.json'), 'utf8'), await readFile(join(rootB, 'state.json'), 'utf8'));
 });

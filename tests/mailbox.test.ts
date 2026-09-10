@@ -282,3 +282,20 @@ test('a directory that becomes unsafe after a successful operation is refused ag
   await assert.rejects(box.send(pm, { to: 'backend', kind: 'note', subject: 'FYI', body: 'x' }),
     /Unsafe directory/, 'Validation is re-run, not cached, on every operation');
 });
+
+test('a no-op mutation on a legacy mailbox does not rewrite the record', async (t) => {
+  const { mkdir, readFile, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-legacy-noop-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  // A pre-envelope record carries no canonical serialization, so the no-op
+  // check must fall back to serializing rather than assume one is present.
+  await mkdir(join(root, 'shop'), { mode: 0o700 });
+  await writeFile(join(root, 'shop', 'state.json'),
+    JSON.stringify({ version: 1, members: [], messages: [] }), { mode: 0o600 });
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const before = await readFile(join(root, 'shop', 'state.json'), 'utf8');
+  assert.deepEqual(await box.notes(pm), [], 'No notes to consume');
+  assert.equal(await readFile(join(root, 'shop', 'state.json'), 'utf8'), before,
+    'A mutation that changes nothing must not publish a revision');
+});

@@ -14,7 +14,13 @@ import { dirname, join } from 'node:path';
  * hard-links its envelope into a bounded revisions/ history, which doubles as
  * recovery evidence for interrupted writes.
  */
-export type Record<T> = { revision: number; payload: T };
+/**
+ * `payloadJson` is the canonical `JSON.stringify(payload)`, carried when the
+ * parser already had to compute it for the content hash. It is consistent by
+ * construction, never derived from the raw file text, and always optional: a
+ * pre-envelope record has none and callers fall back to serializing.
+ */
+export type Record<T> = { revision: number; payload: T; payloadJson?: string };
 /** Parse raw file bytes into a record, throwing on corruption. Never deletes. */
 export type Normalize<T> = (raw: string) => Record<T>;
 /**
@@ -46,10 +52,11 @@ export function envelope<T>(raw: string): Record<T> {
   if (typeof parsed.revision !== 'number' || !Number.isSafeInteger(parsed.revision) || parsed.revision < 1) {
     throw Object.assign(new Error('Invalid record revision.'), { code: 'CORRUPT_RECORD' });
   }
-  if (parsed.contentHash !== sha256(JSON.stringify(parsed.payload))) {
+  const payloadJson = JSON.stringify(parsed.payload);
+  if (parsed.contentHash !== sha256(payloadJson)) {
     throw Object.assign(new Error('Record hash mismatch; preserved for manual recovery.'), { code: 'CORRUPT_RECORD' });
   }
-  return { revision: parsed.revision, payload: parsed.payload as T };
+  return { revision: parsed.revision, payload: parsed.payload as T, payloadJson };
 }
 
 function assertSafeFile(path: string, info: { isFile(): boolean; size: number; mode: number; uid: number }, maxBytes: number): void {
@@ -162,7 +169,7 @@ async function pruneRevisions(dir: string, latest: number): Promise<void> {
  */
 export async function publish<T>(
   path: string, expectedRevision: number, payload: T, normalize: Normalize<T>,
-  options: { maxBytes: number; durability?: Durability },
+  options: { maxBytes: number; durability?: Durability; payloadJson?: string },
 ): Promise<Record<T>> {
   const durability = options.durability ?? 'full';
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -175,12 +182,15 @@ export async function publish<T>(
       throw Object.assign(new Error(`Record changed before the write; current revision is ${revision}.`), { code: 'STALE_REVISION' });
     }
     const next = revision + 1;
-    const payloadJson = JSON.stringify(payload);
+    // Supplied by callers that already serialized this exact object; it must
+    // equal JSON.stringify(payload). The record stays self-consistent either
+    // way, because the hash is taken over the string that gets embedded.
+    const payloadJson = options.payloadJson ?? JSON.stringify(payload);
     const text = `{"schemaVersion":1,"revision":${next},"contentHash":"${sha256(payloadJson)}","payload":${payloadJson}}`;
     if (Buffer.byteLength(text) > options.maxBytes) throw new Error('Record size limit exceeded.');
     const historyPath = join(dirname(path), 'revisions', `${next}.json`);
     const previous = await readRecord(historyPath, (raw: string) => envelope<T>(raw), options.maxBytes);
-    if (previous && (previous.revision !== next || sha256(JSON.stringify(previous.payload)) !== sha256(payloadJson))) {
+    if (previous && (previous.revision !== next || (previous.payloadJson ?? JSON.stringify(previous.payload)) !== payloadJson)) {
       throw new Error('An interrupted publication owns this revision; explicit recovery is required.');
     }
     if (!previous) await writeAtomic(historyPath, text, durability);
@@ -195,7 +205,7 @@ export async function publish<T>(
     cache.delete(path);
     counters.publishes++;
     await pruneRevisions(dirname(path), next).catch(() => {});
-    return { revision: next, payload };
+    return { revision: next, payload, payloadJson };
   } finally {
     await lock.close();
     await unlink(lockPath).catch(() => {});
