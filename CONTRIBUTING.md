@@ -4,6 +4,7 @@
 - Deliver changes through a pull request using `.github/pull_request_template.md`.
 - Use English for code, documentation, tests, issues, and pull requests.
 - Use strict TypeScript and only APIs documented by Pi 0.85.1.
+- Use immutable values: `npm run check` fails on any `let` under `src/`. See [AGENTS.md](AGENTS.md).
 - Do not import host internals, monkey-patch prototypes, or access real credentials, sessions, or user configuration in tests.
 - Keep runtime dependencies in `dependencies`; list Pi-provided packages in `peerDependencies` with a `*` range.
 - Run `npm run check`, `npm test`, and `npm pack --dry-run` before review.
@@ -11,7 +12,7 @@
 
 ## Package documentation
 
-Follow [docs/package.md](docs/package.md) and its versioned official references. Keep README examples consistent with registered commands, distinguish tested behavior from unverified compatibility, and verify `npm run check:package` before release.
+Follow [docs/package.md](docs/package.md) and its versioned official references. Keep README examples consistent with registered commands, distinguish tested behavior from unverified compatibility, and verify `npm run check:package` before release. Design detail belongs in [docs/architecture.md](docs/architecture.md), not the README.
 
 ## Releases
 

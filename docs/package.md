@@ -2,57 +2,40 @@
 
 ## Identity
 
-- npm name: `@prjct.app/pi-team`.
-- Initial version: `0.1.0`.
-- Source repository: [prjct-app/pi-team](https://github.com/prjct-app/pi-team).
-- Tested host: Pi `0.85.1`; Node.js `22.19+`.
+- npm name: `@prjct.app/pi-team`
+- Repository: [prjct-app/pi-team](https://github.com/prjct-app/pi-team)
+- Tested host: Pi `0.85.1`; Node.js `22.19+`
 
-The npm name and repository name may differ. Repository URLs remain unchanged. Existing runtime command names, event names, persisted entry types, and settings keys are unchanged by the package rename.
-
-## Resource manifest
-
-```json
-{
-  "name": "@prjct.app/pi-team",
-  "keywords": [
-    "pi-package"
-  ],
-  "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
-  }
-}
-```
-
-The `pi-package` keyword makes the package discoverable. Manifest paths are relative to the package root. The extension entry point is shipped as TypeScript because Pi loads it directly. There is no CLI binary or JavaScript build artifact to install separately.
+The npm name and repository name may differ. The package rename changed no
+runtime command names, event names, persisted entry types, or settings keys.
 
 ## Dependencies
 
-Pi-provided libraries imported by this package are declared in `peerDependencies` with `*`, as required by Pi's package guide. They are not bundled. Exact Pi 0.85.1 development dependencies establish the tested baseline; the peer wildcard is not a claim that every Pi release is supported.
+Pi-provided libraries are declared in `peerDependencies` with `*`, as the Pi
+package guide requires, and are not bundled. The exact Pi 0.85.1 devDependencies
+establish the tested baseline; the peer wildcard is not a claim that every Pi
+release is supported. This package has **no runtime dependencies**: storage is
+self-contained.
 
-Third-party runtime dependencies belong in `dependencies`. Companion extensions are installed separately only when communication uses Pi's event bus; this package does not import code from a separately installed companion. A package that directly imports another Pi package's resources must instead bundle it following the official guide.
+Third-party runtime dependencies would belong in `dependencies`. A package that
+directly imports another Pi package's resources must bundle it instead.
 
-## Public interfaces
+## Publishing
 
-Uses public commands, tools, lifecycle events, custom messages, persisted session entries, and programmatic compaction through `ExtensionContext.compact()`. Storage is self-contained with optimistic-concurrency records; this package has no runtime dependencies. Pi libraries remain peer dependencies.
-
-## Published contents
-
-The `files` allowlist includes runtime resources, user documentation, and license files. Development tests, dependency folders, repository settings, and Git history are excluded. npm also includes `package.json` automatically. The npm lockfile remains in the repository for repeatable development installs.
-
-Run `npm run check:package` to inspect the exact prospective tarball before release. Check that each manifest entry and each referenced local document exists in the packed file list. Only claim npm availability after verifying a successful registry publication.
+The `files` allowlist ships runtime resources, user documentation, and licence
+files; tests, dependencies, and repository settings are excluded. Run
+`npm run check:package` to inspect the exact prospective tarball, and confirm every
+manifest entry and referenced local document is present. Only claim npm
+availability after verifying a successful registry publication.
 
 ## Official references
 
-These links are pinned to the tested Pi version rather than the moving main branch:
+Pinned to the tested version rather than the moving main branch:
 
-- [Packages: manifest, sources, dependencies, filtering, and deduplication](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md).
-- [Extensions: lifecycle, commands, tools, messages, and UI APIs](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/extensions.md).
-- [TUI: components, rendering, terminal widths, and image support](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/tui.md).
+- [Packages](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md) — manifest, sources, dependencies, deduplication
+- [Extensions](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/extensions.md) — lifecycle, commands, tools, messages, UI
+- [TUI](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/tui.md) — components, rendering, widths
 
-The installed `@earendil-works/pi-coding-agent@0.85.1` package ships the same guides under `docs/`. The [current official guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md) may describe changes beyond this tested baseline.
-
-## Discovery metadata
-
-The `pi-package` keyword identifies this package for the official Pi gallery. Focused keywords describe its actual features. The `pi.image` field points to its public cover, following the [official gallery metadata format](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md#gallery-metadata).
+The installed `@earendil-works/pi-coding-agent@0.85.1` ships the same guides under
+`docs/`. The [current guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
+may describe changes beyond this tested baseline.

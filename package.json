@@ -63,10 +63,10 @@
     "index.ts",
     "src",
     "docs",
+    "!docs/cover.png",
     "README.md",
     "CONTRIBUTING.md",
     "LICENSE",
-    "CHANGELOG.md",
-    "docs/package.md"
+    "CHANGELOG.md"
   ]
 }
