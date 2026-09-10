@@ -162,7 +162,7 @@ const INITIAL: Session = {
 
 /** Cleared on join, restore, and leave so a new membership starts unbiased. */
 const MEMBERSHIP_RESET = {
-  paused: false, leaving: false, closed: false,
+  paused: false, leaving: false, closed: false, aliases: [],
   budget: 0, lastReview: 0, quietReviews: 0, lastRevision: -1,
 } as const;
 
@@ -213,7 +213,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   }
   /** Forget the current membership without leaving the mailbox. */
   function forget() {
-    set(() => ({ member: undefined, active: undefined, leaving: false }));
+    set(() => ({ member: undefined, active: undefined, leaving: false, aliases: [] }));
     persist();
     showWidget(undefined);
   }
@@ -273,7 +273,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       set(() => ({ lastHeartbeat: Date.now() }));
     }
     const snap = await box.snapshot(member);
-    set(() => ({ aliases: snap.members.map(m => m.alias) }));
+    set(() => ({ aliases: snap.members.filter(peer => peer.alias !== member.alias).map(peer => peer.alias) }));
     const inbox = snap.messages.filter(m => m.to === member.alias && m.state === 'pending');
     const pending = inbox.length;
     const { paused, active } = get();
@@ -375,11 +375,13 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   pi.registerMessageRenderer<{ outstanding?: { to: string; subject: string }[] }>('team-review', (message, { expanded }) => reviewView(message.details, expanded));
 
   pi.registerTool({
-    name: 'team_members', label: 'Team members', description: 'List teammates and their status in the joined local team. Does not create agents.',
+    name: 'team_members', label: 'Team members', description: 'List other teammates and their status in the joined local team, excluding this session. Does not create agents.',
     parameters: Type.Object({}),
     async execute() {
-      const members = await queue(() => box.members(required()));
-      const safe = members.map(({ alias, cwd, status }) => ({ alias, cwd: excerptPath(cwd, MEMBER_CWD_EXCERPT), status }));
+      const current = required();
+      const members = await queue(() => box.members(current));
+      const safe = members.filter(member => member.alias !== current.alias)
+        .map(({ alias, cwd, status }) => ({ alias, cwd: excerptPath(cwd, MEMBER_CWD_EXCERPT), status }));
       return { content: [{ type: 'text', text: JSON.stringify(safe) }], details: {} };
     },
   });
@@ -425,7 +427,8 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
         otherTeamWork: bounded(byAge(snap.flow.filter(item => item.from !== current.alias && item.to !== current.alias))
           .map(item => ({ from: item.from, to: item.to, subject: subject(item.subject), state: item.state,
             ageMinutes: age(item.created), assigneeStatus: status(item.to) }))),
-        teammates: snap.members.map(m => ({ alias: m.alias, status: m.status })),
+        teammates: snap.members.filter(member => member.alias !== current.alias)
+          .map(member => ({ alias: member.alias, status: member.status })),
       }) }], details: {} };
     },
   });
@@ -488,8 +491,11 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
               set(() => ({ teamNames }));
               ui.notify(teamNames.join('\n') || 'No teams. Use /team create <team>.', 'info'); break;
             }
-            case 'members':
-              ui.notify((await box.members(required())).map(m => `${m.alias} · ${m.status} · ${m.cwd}`).join('\n'), 'info'); break;
+            case 'members': {
+              const current = required();
+              const teammates = (await box.members(current)).filter(member => member.alias !== current.alias);
+              ui.notify(teammates.map(member => `${member.alias} · ${member.status} · ${member.cwd}`).join('\n') || 'No teammates.', 'info'); break;
+            }
             case 'remove': {
               if (!a || b) throw new Error('Usage: /team remove <alias>');
               const current = required();
@@ -500,7 +506,8 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
                 ui.notify('Teammate removal cancelled.', 'info'); break;
               }
               const result = await box.removeMember(current, a);
-              const aliases = (await box.members(current)).map(member => member.alias);
+              const aliases = (await box.members(current)).filter(member => member.alias !== current.alias)
+                .map(member => member.alias);
               set(() => ({ aliases }));
               ui.notify(`Removed ${a}; settled ${result.settled} unresolved item${result.settled === 1 ? '' : 's'}.`, 'info'); break;
             }
@@ -514,7 +521,8 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
                 set(() => ({ member: renamed }));
                 persist();
               }
-              const aliases = (await box.members(owner)).map(member => member.alias);
+              const aliases = (await box.members(owner)).filter(member => member.alias !== owner.alias)
+                .map(member => member.alias);
               set(() => ({ aliases }));
               enqueueTick();
               ui.notify(`Renamed ${a} to ${b}.`, 'info'); break;

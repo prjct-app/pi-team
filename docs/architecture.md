@@ -114,6 +114,9 @@ Consequences worth knowing:
 - Each `team_status` call is a point-in-time snapshot. Earlier results in the
   same conversation are stale but cannot be retracted, which is why each one is
   kept small.
+- Teammate discovery, status rosters, `/team members`, and recipient completion
+  omit the current alias. The mailbox independently rejects self-addressed
+  messages, so a stale UI or direct tool call cannot create a self-reply loop.
 
 ## Recovery and guarantees
 

@@ -64,6 +64,10 @@ test('/team wake uses the default check-in without a custom message and handles 
   });
   await pm.emit('session_start'); await backend.emit('session_start');
   await pm.command('create shop'); await pm.command('join shop pm');
+  assert.deepEqual(JSON.parse((await pm.tools.get('team_members').execute('call', {}, undefined, undefined, undefined)).content[0].text), []);
+  await pm.command('members');
+  assert.equal(pm.notices.at(-1), 'No teammates.');
+  assert.deepEqual(pm.commands.get('team').getArgumentCompletions('send '), []);
   await pm.command('wake');
   assert.equal(pm.notices.at(-1), 'No teammates to check in with.');
 
@@ -72,6 +76,34 @@ test('/team wake uses the default check-in without a custom message and handles 
   await until(() => backend.received.length === 1);
   assert.match(backend.received[0].content, /Team check-in:/);
   assert.doesNotMatch(backend.received[0].content, /Sender's message:/);
+});
+
+test('member discovery excludes the current session from every recipient surface', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-exclude-self-'));
+  const pm = harness(root, 'pm');
+  const backend = harness(root, 'backend');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await backend.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await backend.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await backend.command('join shop backend');
+
+  const members = JSON.parse((await pm.tools.get('team_members').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+  assert.deepEqual(members.map((member: { alias: string }) => member.alias), ['backend']);
+  const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+  assert.deepEqual(status.teammates.map((member: { alias: string }) => member.alias), ['backend']);
+
+  await pm.command('members');
+  assert.match(pm.notices.at(-1) ?? '', /backend/);
+  assert.doesNotMatch(pm.notices.at(-1) ?? '', /pm ·/);
+  await until(() => pm.commands.get('team').getArgumentCompletions('send ').some((item: { label: string }) => item.label === 'backend'));
+  const recipients = pm.commands.get('team').getArgumentCompletions('send ').map((item: { label: string }) => item.label);
+  assert.deepEqual(recipients, ['backend']);
+
+  await pm.command('leave'); await pm.command('create solo'); await pm.command('join solo pm');
+  assert.deepEqual(pm.commands.get('team').getArgumentCompletions('send '), [],
+    'Recipient completion must not retain members from the previous team');
 });
 
 test('/team remove confirms and settles queued work for an offline teammate', async (t) => {
@@ -319,7 +351,7 @@ test('reload restores the same paused membership but a fork does not inherit it'
   t.after(async () => { await resumed.emit('session_shutdown'); await fork.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
   await resumed.emit('session_start', { reason: 'reload' });
   await resumed.command('members');
-  assert.ok(resumed.notices.some(n => /backend/.test(n)));
+  assert.equal(resumed.notices.at(-1), 'No teammates.');
   const membership = resumed.entries.filter(e => e.customType === 'team-membership').at(-1).data;
   assert.equal(membership.paused, true);
   await fork.emit('session_start', { reason: 'fork' }); await fork.command('members');

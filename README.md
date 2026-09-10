@@ -84,7 +84,7 @@ reloaded. `/new` and `/fork` start unaffiliated sessions on purpose.
 | `/team rename-team shop store` | Rename a team after every member is offline |
 | `/team join shop backend` | Register this session and enable automatic reception |
 | `/team list` | List teams; refresh team-name completion |
-| `/team members` | Show aliases, cwd, and idle/busy/paused/offline status |
+| `/team members` | Show other aliases, cwd, and idle/busy/paused/offline status; excludes this session |
 | `/team remove backend` | Remove an offline alias and interrupt its unresolved work after confirmation |
 | `/team rename-member backend api` | Rename your own alias, or an offline teammate, while preserving its history and queued work |
 | `/team status` | Show every unresolved requester → assignee relationship |
@@ -108,14 +108,15 @@ teams, and teammates.
 
 ## Agent tools
 
-- `team_members` — discover teammates and their status.
+- `team_members` — discover other teammates and their status; excludes this session.
 - `team_send` — send `{ to, kind: "request" | "note", subject, body }`.
 - `team_status` — outstanding work: what you emitted and is unresolved, what is
   queued for you, results awaiting your review, and third-party team activity.
 
 Tools cannot create teams, join, resume reception, change permissions, or launch
-terminals; they require membership you established. A request returns **queued**,
-never "task completed".
+terminals; they require membership you established. Discovery results and recipient
+autocomplete exclude the current session, and sending to yourself is rejected at
+the mailbox boundary. A request returns **queued**, never "task completed".
 
 ## How delivery works
 
