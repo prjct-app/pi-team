@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-team",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Coordinate independent PI Agent sessions with local team messaging, queued tasks, and shared results.",
   "type": "module",
   "keywords": [
