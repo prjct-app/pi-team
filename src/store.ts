@@ -47,14 +47,19 @@ function assertSafeFile(path: string, info: { isFile(): boolean; size: number; m
   }
 }
 
-/** Lock-free read. Missing records stay missing; corrupt records throw. */
-export async function readRecord<T>(path: string, normalize: Normalize<T>, maxBytes: number): Promise<Record<T> | undefined> {
-  let handle;
-  try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+/** Resolve to `undefined` when the target is absent; other errors propagate. */
+async function absentAsUndefined<T>(work: Promise<T>): Promise<T | undefined> {
+  try { return await work; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+/** Lock-free read. Missing records stay missing; corrupt records throw. */
+export async function readRecord<T>(path: string, normalize: Normalize<T>, maxBytes: number): Promise<Record<T> | undefined> {
+  const handle = await absentAsUndefined(open(path, constants.O_RDONLY | constants.O_NOFOLLOW));
+  if (!handle) return undefined;
   try {
     assertSafeFile(path, await handle.stat(), maxBytes);
     return normalize(await handle.readFile('utf8'));
@@ -67,12 +72,8 @@ export async function readRecord<T>(path: string, normalize: Normalize<T>, maxBy
 const cache = new Map<string, { ino: number; size: number; mtimeMs: number; record: Record<unknown> | undefined }>();
 
 export async function readRecordCached<T>(path: string, normalize: Normalize<T>, maxBytes: number): Promise<Record<T> | undefined> {
-  let info;
-  try { info = await stat(path); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') { cache.delete(path); return undefined; }
-    throw error;
-  }
+  const info = await absentAsUndefined(stat(path));
+  if (!info) { cache.delete(path); return undefined; }
   const hit = cache.get(path);
   if (hit && hit.ino === info.ino && hit.size === info.size && hit.mtimeMs === info.mtimeMs) {
     return hit.record as Record<T> | undefined;
@@ -103,23 +104,26 @@ export async function writeAtomic(path: string, text: string, durability: Durabi
   } finally { await unlink(tmp).catch(() => {}); }
 }
 
-async function acquireLock(lockPath: string) {
-  for (let attempt = 0; ; attempt++) {
-    try { return await open(lockPath, 'wx', 0o600); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      // A crashed writer can leave its lock behind; publication takes
-      // microseconds, so a lock older than STALE_LOCK_MS is safe to break.
-      if (attempt === 0) {
-        const info = await stat(lockPath).catch(() => undefined);
-        if (info && Date.now() - info.mtimeMs > STALE_LOCK_MS) {
-          await unlink(lockPath).catch(() => {});
-          continue;
-        }
-      }
-      throw Object.assign(new Error('Another writer holds this record.'), { code: 'RECORD_LOCKED' });
-    }
+const locked = () => Object.assign(new Error('Another writer holds this record.'), { code: 'RECORD_LOCKED' });
+
+/** Resolve to `undefined` when the lock is already held; other errors propagate. */
+async function tryLock(lockPath: string) {
+  try { return await open(lockPath, 'wx', 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
+    throw error;
   }
+}
+
+async function acquireLock(lockPath: string) {
+  const held = await tryLock(lockPath);
+  if (held) return held;
+  // A crashed writer can leave its lock behind; publication takes
+  // microseconds, so a lock older than STALE_LOCK_MS is safe to break.
+  const info = await stat(lockPath).catch(() => undefined);
+  if (!info || Date.now() - info.mtimeMs <= STALE_LOCK_MS) throw locked();
+  await unlink(lockPath).catch(() => {});
+  return await tryLock(lockPath) ?? (() => { throw locked(); })();
 }
 
 async function pruneRevisions(dir: string, latest: number): Promise<void> {

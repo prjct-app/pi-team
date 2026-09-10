@@ -21,6 +21,13 @@ type Presence = { token: string; status: 'idle' | 'busy' | 'paused'; seen: numbe
 export const LEASE_MS = 30_000;
 const MAX_BYTES = 32_000_000;
 const MAX_ATTEMPTS = 100;
+/** Preallocated attempt sequence: a retry counter without a mutable binding. */
+const ATTEMPTS = Array.from({ length: MAX_ATTEMPTS }, (_, index) => index);
+
+function parseMailbox(raw: string): unknown {
+  try { return JSON.parse(raw); }
+  catch { throw new Error('Invalid mailbox format; preserved for manual recovery'); }
+}
 
 export function identifier(value: string): string {
   if (!/^[a-z][a-z0-9-]{0,47}$/.test(value)) {
@@ -54,22 +61,23 @@ export class Mailbox {
     return join(this.path(team), 'presence', `${identifier(alias)}.json`);
   }
 
+  /** Parse either an envelope record or a pre-envelope mailbox. */
+  private parse(raw: string): StoreRecord<State> {
+    const parsed = parseMailbox(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+        (parsed as { schemaVersion?: unknown }).schemaVersion === 1) {
+      return envelope<State>(raw);
+    }
+    // Legacy mailbox without an envelope: accepted once as revision 0 and
+    // rewritten as an envelope record on the next publication.
+    if (!Value.Check(StateSchema, parsed)) throw new Error('Invalid mailbox format; preserved for manual recovery');
+    return { revision: 0, payload: parsed as State };
+  }
+
   /** Envelope records plus transparent migration of pre-envelope mailboxes. */
   private normalize(team: string) {
     return (raw: string): StoreRecord<State> => {
-      let parsed: unknown;
-      try { parsed = JSON.parse(raw); }
-      catch { throw new Error('Invalid mailbox format; preserved for manual recovery'); }
-      let record: StoreRecord<State>;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
-          (parsed as { schemaVersion?: unknown }).schemaVersion === 1) {
-        record = envelope<State>(raw);
-      } else {
-        // Legacy mailbox without an envelope: accepted once as revision 0 and
-        // rewritten as an envelope record on the next publication.
-        if (!Value.Check(StateSchema, parsed)) throw new Error('Invalid mailbox format; preserved for manual recovery');
-        record = { revision: 0, payload: parsed as State };
-      }
+      const record = this.parse(raw);
       const state = record.payload;
       if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; preserved for manual recovery');
       if (state.members.some(m => m.team !== team) || state.messages.some(m => m.team !== team)) {
@@ -89,23 +97,21 @@ export class Mailbox {
   }
 
   private async readPresence(team: string): Promise<Map<string, Presence>> {
-    const map = new Map<string, Presence>();
-    let names: string[];
-    try { names = await readdir(join(this.path(team), 'presence')); }
-    catch { return map; }
-    await Promise.all(names.map(async name => {
-      if (!/^[a-z][a-z0-9-]{0,47}\.json$/.test(name)) return;
+    const names = await readdir(join(this.path(team), 'presence')).catch(() => [] as string[]);
+    const entries = await Promise.all(names.map(async (name): Promise<[string, Presence] | undefined> => {
+      if (!/^[a-z][a-z0-9-]{0,47}\.json$/.test(name)) return undefined;
       try {
         const raw = await readFile(join(this.path(team), 'presence', name), 'utf8');
-        if (raw.length > 4096) return;
+        if (raw.length > 4096) return undefined;
         const presence = JSON.parse(raw) as Presence;
         if (typeof presence?.seen === 'number' && typeof presence?.token === 'string' &&
             ['idle', 'busy', 'paused'].includes(presence?.status)) {
-          map.set(name.slice(0, -'.json'.length), presence);
+          return [name.slice(0, -'.json'.length), presence];
         }
       } catch { /* A presence file may be replaced or removed mid-read. */ }
+      return undefined;
     }));
-    return map;
+    return new Map(entries.filter(entry => !!entry));
   }
 
   private alive(member: Member, presence: Map<string, Presence>): boolean {
@@ -132,24 +138,19 @@ export class Mailbox {
     try { await lstat(this.path(team)); }
     catch { throw new Error(`Unknown team "${team}". Use /team list or /team create.`); }
     await privateDirectory(this.path(team));
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    for (const attempt of ATTEMPTS) {
       const record = await this.readState(team);
       const state = record.payload;
       const before = JSON.stringify(state);
       const presence = await this.readPresence(team);
-      const swept: string[] = [];
-      for (const member of state.members) {
-        if (member.status !== 'offline' && !this.alive(member, presence)) {
-          this.disconnect(state, member);
-          swept.push(member.alias);
-        }
-      }
+      const swept = state.members.filter(member => member.status !== 'offline' && !this.alive(member, presence));
+      for (const member of swept) this.disconnect(state, member);
       const result = action(state);
       if (before === JSON.stringify(state)) return result;
       if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; refusing to write');
       try {
         await publish(this.recordPath(team), record.revision, state, this.normalize(team), { maxBytes: MAX_BYTES });
-        await Promise.all(swept.map(alias => unlink(this.presencePath(team, alias)).catch(() => {})));
+        await Promise.all(swept.map(member => unlink(this.presencePath(team, member.alias)).catch(() => {})));
         return result;
       } catch (error) {
         const code = (error as { code?: string }).code;
