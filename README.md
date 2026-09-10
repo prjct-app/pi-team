@@ -2,7 +2,7 @@
 
 [![pi-team — extension for PI Agent](https://raw.githubusercontent.com/prjct-app/pi-clipboard/main/docs/covers/pi-team.png)](https://pi.dev)
 
-Local, opt-in messaging between independent Pi sessions.
+Coordinate independent PI Agent sessions with local team messaging, queued tasks, and shared results.
 
 `@prjct.app/pi-team` · Team commands, messaging tools, and local mailbox storage; one extension.
 

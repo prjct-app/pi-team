@@ -2,6 +2,9 @@
 
 ## 0.1.3
 
+- Clarify the package description and add focused discovery keywords.
+- Declare the cover image for the official Pi package gallery.
+
 - Align repository, documentation, and cover URLs with the npm package name.
 
 ## 0.1.2

@@ -52,3 +52,7 @@ These links are pinned to the tested Pi version rather than the moving main bran
 - [TUI: components, rendering, terminal widths, and image support](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/tui.md).
 
 The installed `@earendil-works/pi-coding-agent@0.85.1` package ships the same guides under `docs/`. The [current official guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md) may describe changes beyond this tested baseline.
+
+## Discovery metadata
+
+The `pi-package` keyword identifies this package for the official Pi gallery. Focused keywords describe its actual features. The `pi.image` field points to its public cover, following the [official gallery metadata format](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md#gallery-metadata).
