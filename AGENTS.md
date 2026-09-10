@@ -1,7 +1,9 @@
 # Agent instructions
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first; it carries the workflow, review,
-and authorization rules. Read [docs/architecture.md](docs/architecture.md) before
+and authorization rules. Normal changes branch from and target `develop`; only a
+grouped `develop` → `main` promotion may enter the release branch. Read
+[docs/architecture.md](docs/architecture.md) before
 changing storage, presence, or the polling loop.
 
 Two constraints that the code alone will not tell you:

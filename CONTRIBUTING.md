@@ -1,6 +1,8 @@
 # Contributing
 
-- Integration branch: `main`. Create a feature branch from `main`.
+- Stable release branch: `main`. Integration branch: `develop`.
+- Create feature branches from `develop` and target `develop` in normal pull requests.
+- Only grouped promotion pull requests from `develop` may target `main`; use a merge commit so semantic-release can analyze every included conventional commit.
 - Deliver changes through a pull request using `.github/pull_request_template.md`.
 - Use English for code, documentation, tests, issues, and pull requests.
 - Use strict TypeScript and only APIs documented by Pi 0.85.1.
@@ -16,4 +18,4 @@ Follow [docs/package.md](docs/package.md) and its versioned official references.
 
 ## Releases
 
-Merging a releasable change into `main` automatically publishes to npm. Use conventional commit messages and read [Automatic releases](docs/releases.md) before merging. The workflow manages versions and authenticates with npm through OIDC.
+Accumulate reviewed changes on `develop`. When the batch is ready, promote `develop` to `main` through one authorized pull request; that single merge automatically publishes one grouped release to npm. Use conventional commit messages and read [Grouped releases](docs/releases.md) before promotion. The workflow manages versions and authenticates with npm through OIDC.
