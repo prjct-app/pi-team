@@ -28,7 +28,7 @@ Our user-selected scope differs deliberately:
 | Approval | Never supplied by peers; preserve local policies |
 | Coordination | Messages plus task-boundary context compaction; no task board or worktree manager |
 | Limits | Bounded conversations, inboxes and automatic turns |
-| UI | Existing Pi loader plus a compact requester → assignee flow widget, `/team status`, and expandable messages |
+| UI | Existing Pi loader plus a minimal session widget, on-demand requester → assignee flow through `/team status`, and expandable messages |
 
 Pi APIs used: `registerCommand`, `registerTool`, `sendMessage`, custom entry/message
 renderers, `setWidget`, `getEditorText`, `isIdle`, `hasPendingMessages`, `compact`,

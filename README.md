@@ -11,7 +11,7 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 - Automatic delivery when a teammate is idle; pending work survives restarts.
 - Automatic results verified against the original request, plus periodic review turns that chase unresolved work.
 - Automatic task-boundary compaction before the next team turn, keeping independent sessions focused and reusable.
-- Live request-flow widget showing requester → assignee relationships, folded transcript previews, and one `/team` command surface.
+- Minimal live session widget, on-demand requester → assignee status, folded transcript previews, and one `/team` command surface.
 
 ## Demo
 
@@ -79,22 +79,19 @@ compacts that result-review turn before accepting another team turn.
 
 ### Status widget
 
-While joined, a live widget above the editor shows the session header and up to
-five unresolved requests as requester → assignee relationships:
+While joined, a minimal live widget above the editor shows only the session
+header:
 
 ```text
 shop · pm · connected
-request flow (requester → assignee)
-• frontend → backend (busy) · queued · Publish the login API contract
-• pm → reviewer (busy) · active · Review authentication changes
 ```
 
-The header state is `connected`, `working`, `compacting`, `paused`, or `select a model`. Its
-pending count covers everything addressed to you that is still queued. The flow
-lines identify the task subject, assignee presence, and whether the request is
-queued or active. The widget shows up to five relationships; `/team status`
-shows the complete unresolved flow. Subjects are visible team-wide for
-coordination, while request bodies remain limited to their sender and recipient.
+The state is `connected`, `working`, `compacting`, `paused`, or `select a model`.
+A pending count is appended when work addressed to you is still queued. Run
+`/team status` to show the complete unresolved requester → assignee flow,
+including each task subject, assignee presence, and whether the request is queued
+or active. Subjects are visible team-wide for coordination, while request bodies
+remain limited to their sender and recipient.
 
 ## Three terminals
 
@@ -336,7 +333,7 @@ When switching from GitHub to npm, remove the Git installation first, then insta
 
 | Symptom or notice | Cause and action |
 | --- | --- |
-| A request stays queued | Check the live request-flow widget or `/team status` to identify its requester, assignee, subject, and assignee presence. The recipient may be busy, paused, offline, missing a selected model, or typing in its editor. After five minutes, automatic review turns chase the teammate or surface the blockage to you. |
+| A request stays queued | Run `/team status` to identify its requester, assignee, subject, and assignee presence. The recipient may be busy, paused, offline, missing a selected model, or typing in its editor. After five minutes, automatic review turns chase the teammate or surface the blockage to you. |
 | `Team auto-turn limit reached` | Five automatic peer turns ran without user input. Review the transcript, then `/team resume`. |
 | Automatic context compaction failed | The mailbox result was already persisted. Reception continues, and Pi can retry through its normal threshold compaction or `/compact`. |
 | `Membership expired or replaced` | Another live session took your alias, or your membership was fenced out. Rejoin with `/team join <team> <alias>`; choose a new alias if the old one is in use. |
