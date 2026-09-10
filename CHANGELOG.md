@@ -1,3 +1,9 @@
+## [0.5.7](https://github.com/prjct-app/pi-team/compare/v0.5.6...v0.5.7) (2026-09-10)
+
+### Bug Fixes
+
+* remove automatic team compaction ([#27](https://github.com/prjct-app/pi-team/issues/27)) ([862d64e](https://github.com/prjct-app/pi-team/commit/862d64ec2492764222f6136640498e9437ed9de4))
+
 ## [0.5.6](https://github.com/prjct-app/pi-team/compare/v0.5.5...v0.5.6) (2026-09-10)
 
 ## [0.5.5](https://github.com/prjct-app/pi-team/compare/v0.5.4...v0.5.5) (2026-09-10)
