@@ -1,5 +1,10 @@
 ## Summary
 
+## Branch flow
+
+- [ ] Normal changes target `develop`, or this PR is the grouped `develop` → `main` promotion
+- [ ] The branch is based on the latest applicable integration branch
+
 ## Official Pi API compliance
 
 - [ ] Uses only APIs documented by Pi 0.85.1

@@ -30,6 +30,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Enforce grouped release promotion
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          GITHUB_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: node .github/release/validate-promotion.cjs
       - run: npm ci --prefix .github/release --ignore-scripts
       - run: node --test .github/release/policy.test.cjs
 
