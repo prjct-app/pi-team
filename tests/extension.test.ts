@@ -335,7 +335,7 @@ test('a temporarily missing mailbox record notifies but never pauses reception',
   assert.match(be.received[0].content, /Still alive/);
 });
 
-test('the TUI shows team-wide requester-to-assignee blockers and offers a full status view', async (t) => {
+test('the TUI keeps the persistent team widget minimal and shows request flow on demand', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-flow-'));
   const pm = harness(root, 'pm');
   const frontend = harness(root, 'frontend');
@@ -350,14 +350,15 @@ test('the TUI shows team-wide requester-to-assignee blockers and offers a full s
   backend.busy(true); await backend.command('join shop backend');
   await frontend.command('send backend Publish the login API contract');
 
-  await until(() => pm.widgets.get('team')?.some(line => /frontend → backend/.test(line)) ?? false);
-  const widget = pm.widgets.get('team')!.join('\n');
-  assert.match(widget, /request flow \(requester → assignee\)/);
-  assert.match(widget, /frontend → backend \(busy\) · queued · Publish the login API contract/);
+  await until(async () => {
+    const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+    return status.teamFlow.length === 1;
+  });
+  assert.deepEqual(pm.widgets.get('team'), ['shop · pm · connected']);
 
   await pm.command('status');
   assert.match(pm.notices.at(-1) ?? '', /Request flow \(requester → assignee\)/);
-  assert.match(pm.notices.at(-1) ?? '', /frontend → backend \(busy\)/);
+  assert.match(pm.notices.at(-1) ?? '', /frontend → backend \(busy\) · queued · Publish the login API contract/);
 
   const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
   assert.equal(status.teamFlow[0].subject, 'Publish the login API contract');
@@ -365,5 +366,5 @@ test('the TUI shows team-wide requester-to-assignee blockers and offers a full s
 
   backend.busy(false);
   await until(() => backend.received.length === 1);
-  await until(() => pm.widgets.get('team')?.some(line => /frontend → backend .* · active ·/.test(line)) ?? false);
+  assert.deepEqual(pm.widgets.get('team'), ['shop · pm · connected']);
 });
