@@ -26,7 +26,7 @@ Our user-selected scope differs deliberately:
 | Offline recipient | Persist to a known alias until rejoin |
 | Results | Automatic last-text reply to requests, quoted against the original request |
 | Approval | Never supplied by peers; preserve local policies |
-| Coordination | Messages plus task-boundary context compaction; no task board or worktree manager |
+| Coordination | Direct messages, `/team wake [message]` bulk check-ins, and task-boundary context compaction; no task board or worktree manager |
 | Limits | Bounded conversations, inboxes and automatic turns |
 | UI | Existing Pi loader plus a minimal session widget, on-demand requester → assignee flow through `/team status`, and expandable messages |
 
