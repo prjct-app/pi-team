@@ -9,7 +9,11 @@ You open the terminals; `pi-team` lets those sessions send each other work, wake
 free teammate, and return a result the requester can verify. Everything stays on
 this machine, in local files.
 
-[![Watch the pi-team demo](media/pi-team-demo/poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/pi-team-demo/pi-team-demo.mp4)
+## Demo
+
+[![Watch the pi-team promotional demo](https://raw.githubusercontent.com/prjct-app/pi-team/main/media/pi-team-demo/poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/pi-team-demo/pi-team-demo.mp4)
+
+[Watch or download the 40-second demo](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/pi-team-demo/pi-team-demo.mp4). It shows local session coordination, queued work, correlated results, and the human-controlled workflow in PI Agent.
 
 ## Install
 
