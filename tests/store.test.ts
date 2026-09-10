@@ -82,3 +82,15 @@ test('concurrent writers retry through conflicts; exactly one wins each revision
   assert.equal(results.filter(r => r.status === 'rejected').length, 0);
   assert.equal((await readRecord(path, envelope<{ log: number[] }>, MAX))?.payload.log.length, 8);
 });
+
+test('a non-durable atomic write still replaces the record whole', async (t) => {
+  const { readdir } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-store-none-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'presence', 'pm.json');
+  await writeAtomic(path, '{"a":1}', 'none');
+  await writeAtomic(path, '{"b":2}', 'none');
+  assert.equal(await readFile(path, 'utf8'), '{"b":2}', 'The last write is visible in full');
+  const left = (await readdir(join(root, 'presence'))).filter(name => name.endsWith('.tmp'));
+  assert.deepEqual(left, [], 'No temporary file survives a successful write');
+});

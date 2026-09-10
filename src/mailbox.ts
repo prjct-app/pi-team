@@ -36,13 +36,22 @@ export function identifier(value: string): string {
   return value;
 }
 
+/**
+ * Directories known to have been created by this process. Only the `mkdir` is
+ * skipped: the `lstat` check runs every time, because detecting a directory
+ * swapped after the fact is the entire point of the check.
+ */
+const created = new Set<string>();
+
 async function privateDirectory(path: string): Promise<void> {
-  await mkdir(path, { mode: 0o700, recursive: true });
+  if (!created.has(path)) await mkdir(path, { mode: 0o700, recursive: true });
   const stat = await lstat(path);
   if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 ||
       (process.getuid && stat.uid !== process.getuid())) {
+    created.delete(path);
     throw new Error(`Unsafe directory: ${path}. Expected a private directory owned by this user.`);
   }
+  created.add(path);
 }
 
 /**
@@ -203,7 +212,7 @@ export class Mailbox {
 
   private async writePresence(member: Membership, status: 'idle' | 'busy' | 'paused'): Promise<void> {
     const text = JSON.stringify({ token: member.token, status, seen: Date.now() } satisfies Presence);
-    await writeAtomic(this.presencePath(member.team, member.alias), text, 'light');
+    await writeAtomic(this.presencePath(member.team, member.alias), text, 'none');
   }
 
   /** Lock-free heartbeat: touches only this member's own presence file. */

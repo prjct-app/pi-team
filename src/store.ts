@@ -17,8 +17,13 @@ import { dirname, join } from 'node:path';
 export type Record<T> = { revision: number; payload: T };
 /** Parse raw file bytes into a record, throwing on corruption. Never deletes. */
 export type Normalize<T> = (raw: string) => Record<T>;
-/** 'full' fsyncs file and directory; 'light' fsyncs the file only (presence). */
-export type Durability = 'full' | 'light';
+/**
+ * 'full' fsyncs file and directory; 'light' fsyncs the file only; 'none'
+ * fsyncs nothing and relies on the atomic rename alone. Use 'none' only for
+ * records that are rewritten on a timer and safe to lose, such as presence:
+ * a lost write there makes a member look offline sooner, never alive longer.
+ */
+export type Durability = 'full' | 'light' | 'none';
 
 const STALE_LOCK_MS = 10_000;
 const KEEP_REVISIONS = 32;
@@ -99,17 +104,22 @@ async function syncDirectory(path: string): Promise<void> {
 
 /** Atomic last-writer-wins write for records without revision history (presence). */
 export async function writeAtomic(path: string, text: string, durability: Durability = 'full'): Promise<void> {
+  // Always: the presence directory does not exist before its first write.
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${randomUUID()}.tmp`;
   const handle = await open(tmp, 'wx', 0o600);
   try {
     await handle.writeFile(text, 'utf8');
-    await handle.sync();
+    if (durability !== 'none') await handle.sync();
   } finally { await handle.close(); }
   try {
     await rename(tmp, path);
     if (durability === 'full') await syncDirectory(path);
-  } finally { await unlink(tmp).catch(() => {}); }
+    return;
+  } catch (error) {
+    await unlink(tmp).catch(() => {});
+    throw error;
+  }
 }
 
 const locked = () => Object.assign(new Error('Another writer holds this record.'), { code: 'RECORD_LOCKED' });
