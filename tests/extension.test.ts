@@ -74,6 +74,73 @@ test('/team wake uses the default check-in without a custom message and handles 
   assert.doesNotMatch(backend.received[0].content, /Sender's message:/);
 });
 
+test('/team remove confirms and settles queued work for an offline teammate', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-remove-command-'));
+  const pm = harness(root, 'pm', [], { confirm: false });
+  const backend = harness(root, 'backend');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await backend.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await backend.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await backend.command('join shop backend');
+  backend.busy(true);
+  await pm.command('send backend Work that cannot start');
+  await backend.command('leave');
+
+  await pm.command('remove backend');
+  assert.match(pm.notices.at(-1) ?? '', /cancelled/i);
+  assert.equal((await pm.tools.get('team_members').execute('call', {}, undefined, undefined, undefined)).content[0].text.includes('backend'), true);
+
+  pm.confirm(true);
+  await pm.command('remove backend');
+  assert.match(pm.notices.at(-1) ?? '', /Removed backend.*settled 1/i);
+  assert.equal((await pm.tools.get('team_members').execute('call', {}, undefined, undefined, undefined)).content[0].text.includes('backend'), false);
+  await until(() => pm.received.some(message => message.details?.result?.outcome === 'interrupted'));
+});
+
+test('/team rename-member updates a live session and preserves its identity', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-rename-member-command-'));
+  const pm = harness(root, 'pm');
+  const backend = harness(root, 'backend');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await backend.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await backend.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await backend.command('join shop backend');
+
+  await pm.command('rename-member pm lead');
+  const [patch] = await pm.emit('before_agent_start', { systemPrompt: 'BASE' }) as [{ systemPrompt: string }];
+  assert.match(patch.systemPrompt, /your alias: lead/);
+  await pm.command('send backend Continue under the new alias');
+  await until(() => backend.received.length === 1);
+  assert.equal(backend.received[0].details.from, 'lead');
+});
+
+test('/team rename-team and delete manage inactive teams with confirmation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-team-command-'));
+  const admin = harness(root, 'admin');
+  const member = harness(root, 'member');
+  t.after(async () => {
+    await admin.emit('session_shutdown'); await member.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await admin.emit('session_start'); await member.emit('session_start');
+  await admin.command('create old-name'); await member.command('join old-name worker'); await member.command('leave');
+  await admin.command('rename-team old-name new-name');
+  assert.match(admin.notices.at(-1) ?? '', /Renamed old-name to new-name/);
+
+  admin.confirm(false);
+  await admin.command('delete new-name');
+  assert.match(admin.notices.at(-1) ?? '', /cancelled/i);
+  admin.confirm(true);
+  await admin.command('delete new-name');
+  assert.match(admin.notices.at(-1) ?? '', /Deleted new-name/);
+  await admin.command('list');
+  assert.match(admin.notices.at(-1) ?? '', /No teams/);
+});
+
 test('Pi commands connect peers; a request waits while working, typing, or showing a dialog', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-'));
   const pm = harness(root, 'pm');
@@ -275,14 +342,17 @@ test('message previews are one line and details expand without emitting terminal
   assert.doesNotMatch(expanded, /Malicious title/);
 });
 
-test('explicit leave detaches locally even when the old team storage is unavailable', async (t) => {
+test('a session detaches locally when its team was renamed or deleted elsewhere', async (t) => {
   const { rename } = await import('node:fs/promises');
   const root = await mkdtemp(join(tmpdir(), 'pi-team-'));
   const h = harness(root, 'session');
   t.after(async () => { await h.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
   await h.emit('session_start'); await h.command('create old'); await h.command('join old pm');
+  await until(() => h.widgets.get('team')?.[0] === 'old · pm · connected');
   await rename(join(root, 'old'), join(root, 'archived'));
-  await h.command('leave'); await h.command('create next'); await h.command('join next pm');
+  await until(() => h.widgets.get('team') === undefined);
+  assert.ok(h.notices.some(n => /Unknown team "old"/.test(n)));
+  await h.command('create next'); await h.command('join next pm');
   assert.ok(h.notices.some(n => /Joined next as pm/.test(n)));
 });
 

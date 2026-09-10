@@ -2,19 +2,21 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { installTeam } from '../src/index.ts';
 
 type Handler = (event: any, ctx: any) => unknown;
-export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number } = {}) {
+export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; confirm?: boolean } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
   const entries: any[] = [...saved];
   const received: any[] = [];
   const notices: string[] = [];
+  const confirmations: { title: string; message: string }[] = [];
   const renderers = new Map<string, any>();
   const widgets = new Map<string, string[]>();
   let idle = true;
   let pending = false;
   let editor = '';
   let model: unknown = { id: 'simulated-model' };
+  let confirmation = options.confirm ?? true;
   // A fresh object each time: Pi hands the extension a new ExtensionContext on
   // session start, and code that caches per-context state must notice.
   const makeContext = () => ({
@@ -24,6 +26,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
     compact: () => { throw new Error('Nothing to compact (session too small)'); },
     sessionManager: { getSessionId: () => session, getBranch: () => entries },
     ui: { notify: (s: string) => notices.push(s), getEditorText: () => editor,
+      confirm: async (title: string, message: string) => { confirmations.push({ title, message }); return confirmation; },
       setWidget: (name: string, value: undefined | string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] })) => {
         if (!value) widgets.delete(name);
         else if (Array.isArray(value)) widgets.set(name, value);
@@ -47,7 +50,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000 });
   return {
-    received, notices, entries, tools, commands, renderers, widgets,
+    received, notices, confirmations, entries, tools, commands, renderers, widgets,
     async emit(name: string, event: unknown = {}) {
       const results: unknown[] = [];
       for (const handler of handlers.get(name) ?? []) results.push(await handler(event, context.current));
@@ -61,6 +64,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
     pending(value: boolean) { pending = value; },
     editor(value: string) { editor = value; },
     modelAvailable(value: boolean) { model = value ? { id: 'simulated-model' } : undefined; },
+    confirm(value: boolean) { confirmation = value; },
   };
 }
 export async function until(check: () => boolean | Promise<boolean>, ms = 5000): Promise<void> {

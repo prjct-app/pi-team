@@ -80,9 +80,13 @@ reloaded. `/new` and `/fork` start unaffiliated sessions on purpose.
 | Command | Meaning |
 | --- | --- |
 | `/team create shop` | Create explicitly; does not join automatically |
+| `/team delete shop` | Permanently delete an inactive team after confirmation |
+| `/team rename-team shop store` | Rename a team after every member is offline |
 | `/team join shop backend` | Register this session and enable automatic reception |
 | `/team list` | List teams; refresh team-name completion |
 | `/team members` | Show aliases, cwd, and idle/busy/paused/offline status |
+| `/team remove backend` | Remove an offline alias and interrupt its unresolved work after confirmation |
+| `/team rename-member backend api` | Rename your own alias, or an offline teammate, while preserving its history and queued work |
 | `/team status` | Show every unresolved requester → assignee relationship |
 | `/team wake [message]` | Queue an actionable check-in for every other teammate |
 | `/team send backend Implement login` | Queue a request that can start work |
@@ -95,7 +99,12 @@ reloaded. `/new` and `/fork` start unaffiliated sessions on purpose.
 Names and aliases are 1–48 lowercase letters, digits, or hyphens, starting with a
 letter. Unknown teams are rejected, never implicitly created; duplicate live
 aliases are rejected. Sending to an offline **known** alias queues until someone
-rejoins it. Tab completion covers subcommands, discovered teams, and teammates.
+rejoins it. Removing that alias instead settles every unresolved request involving
+it; incoming requests produce an interrupted result so their requesters stop waiting.
+Renaming an alias rewrites its message addresses so queued work follows the new
+name. Team deletion and rename require every member to be offline, and destructive
+operations require confirmation. Tab completion covers subcommands, discovered
+teams, and teammates.
 
 ## Agent tools
 
@@ -175,6 +184,7 @@ defaults, not user-configurable yet.
 | `Team history full (500 records)` | At capacity; history is never deleted. Create a fresh team and rejoin. |
 | Repeated storage warnings | Conflicts retry automatically and never pause reception. If one persists, check that the teams directory is on a local disk and report it. |
 | A teammate went offline mid-task | Its claimed work is interrupted and the emitter receives that result; it is not replayed. Review the worktree, then resend explicitly. |
+| Work remains queued for an alias that will not return | Use `/team remove <alias>` to interrupt and settle its unresolved work, or `/team rename-member <alias> <new-alias>` to preserve the queue under a replacement alias. |
 
 ## Development
 

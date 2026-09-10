@@ -22,10 +22,12 @@ hard-links it into a bounded `revisions/` history, and atomically renames it int
 place, so a concurrent read sees either the whole previous record or the whole
 next one. The history doubles as recovery evidence for an interrupted write.
 
-Writers compare-and-swap on the revision under a short-lived sibling lock.
-A conflict fails fast and the caller retries against a fresh read, so many agents
-write concurrently instead of queueing behind a team-wide lock. A lock abandoned
-by a crashed writer is reclaimed after ten seconds.
+Writers compare-and-swap on the revision under a short-lived per-team lock in
+`~/.pi/agent/teams/.locks/`. Keeping the lock outside the team directory lets
+rename and deletion fence stale publishers without allowing them to recreate a
+moved directory. A conflict fails fast and the caller retries against a fresh
+read, so many agents write concurrently instead of queueing behind a team-wide
+lock. A lock abandoned by a crashed writer is reclaimed after ten seconds.
 
 Because every publication renames a **new inode** into place, readers can safely
 cache a parsed record keyed on `(inode, size, mtime)`: a write by any process
@@ -41,14 +43,16 @@ and never touch `state.json`.
 These files are deliberately non-durable: the atomic rename is kept, both fsyncs
 are not. Presence expires after 30 seconds and is rewritten every 2, so a write
 lost to a crash only makes a member look offline sooner — never alive longer.
-A member is also considered gone as soon as its recorded process has exited.
+A member is also considered gone as soon as its recorded process has exited. A
+heartbeat never creates a missing parent directory, so one already in flight
+cannot resurrect a team after rename or deletion.
 
 ## Request lifecycle
 
 A request is queued, claimed when the recipient is idle, worked on, and settled
-with a result delivered back to the emitter. The recipient compacts before
-accepting another team turn; the emitter verifies the result against its original
-request and replies in-thread only if something is missing.
+with a result delivered back to the emitter. Once settlement is durable, the
+recipient can accept another team turn; the emitter verifies the result against
+its original request and replies in-thread only if something is missing.
 
 States are `pending`, `processing`, `completed`, `interrupted`, and `seen`
 (notes already displayed).
@@ -59,13 +63,31 @@ A session that dies holding a claim would otherwise leave its requester waiting
 forever, so peers interrupt the claim on its behalf and the requester receives an
 `interrupted` result.
 
-Members are never removed from the record — leaving only marks them offline — so
-"someone is offline" is permanently true once anyone has ever left and cannot be
-used to decide when to sweep. A snapshot instead reports `sweepable`, true only
-when a member the record still counts as connected is actually dead **and** still
-holds a claim, which is the only case where sweeping changes anything. Everything
-else degrades correctly without it: rejoining re-admits a stale alias on its own,
-and displayed status comes from presence rather than the record.
+Leaving marks a member offline but retains its address and history so the same
+alias can rejoin. Therefore "someone is offline" is not enough to decide when to
+sweep. A snapshot instead reports `sweepable`, true only when a member the record
+still counts as connected is actually dead **and** still holds a claim, which is
+the only case where sweeping changes anything. Everything else degrades correctly
+without it: rejoining re-admits a stale alias on its own, and displayed status
+comes from presence rather than the record.
+
+## Team and member lifecycle
+
+Lifecycle changes are user-only commands; agents receive no tool that can delete
+or rename identities. Removing a member is allowed only while it is offline. The
+operation removes the roster entry, cancels unresolved work emitted by that alias,
+and turns requests addressed to it into interrupted results for their requesters.
+Renaming rewrites every message endpoint so pending work and history follow the new
+alias. A live session may rename itself; only offline peers can be renamed by
+another member. Ownership tokens fence the old alias after either operation.
+
+Team rename and deletion require every recorded member to be offline. They acquire
+stable locks for both names in lexical order, preventing deadlock and fencing
+concurrent joins or publishers. Rename moves the directory first and then writes a
+new revision with the new team name. If the process stops between those steps,
+repeating the same rename recognizes and completes that partial state. Deletion
+first moves the directory to a hidden tombstone and then recursively removes it,
+so readers never observe a partially deleted public team directory.
 
 ## Context budget
 
@@ -95,9 +117,10 @@ Consequences worth knowing:
 
 ## Recovery and guarantees
 
-Ownership tokens fence out replaced sessions. Pending messages survive
-disconnection. Claimed work is marked interrupted on disconnect or rejoin and is
-**not automatically replayed**, since edits may already have happened.
+Ownership tokens fence out replaced, renamed, or removed sessions. Pending
+messages survive disconnection and alias/team rename. Claimed work is marked
+interrupted on disconnect or rejoin and is **not automatically replayed**, since
+edits may already have happened.
 
 This favours avoiding duplicate side effects over guaranteed execution. **There is
 no exactly-once guarantee** for filesystem changes or model actions: a crash after
@@ -137,8 +160,8 @@ or protection of secrets from other processes under the same OS user.
 ## Pi interfaces used
 
 `registerCommand`, `registerTool`, `sendMessage`, `appendEntry`, custom entry and
-message renderers, `setWidget`, `getEditorText`, `isIdle`, `hasPendingMessages`,
-`compact`, session lifecycle events, UI prompt events, `tool_result`,
+message renderers, `setWidget`, `getEditorText`, `confirm`, `isIdle`,
+`hasPendingMessages`, session lifecycle events, UI prompt events, `tool_result`,
 `message_end`, and `agent_settled`. All public and documented; no host internals
 are imported, no prototypes patched, and peer text is never shell-evaluated or
 expanded as file mentions.

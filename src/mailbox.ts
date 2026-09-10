@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename, rm, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Value } from 'typebox/value';
 import { ResultSchema, StateSchema } from './schema.ts';
-import { envelope, publish, readRecord, readRecordCached, writeAtomic, type Record as StoreRecord } from './store.ts';
+import { envelope, publish, publishLocked, readRecord, readRecordCached, withFileLock, writeAtomic, type Record as StoreRecord } from './store.ts';
 
 export type Membership = { team: string; alias: string; session: string; token: string };
 export type Member = Membership & { cwd: string; pid: number; seen: number; status: 'idle' | 'busy' | 'paused' | 'offline' };
@@ -66,6 +66,23 @@ export class Mailbox {
 
   private path(team: string): string { return join(this.root, identifier(team)); }
   private recordPath(team: string): string { return join(this.path(team), 'state.json'); }
+  private lockPath(team: string): string { return join(this.root, '.locks', `${identifier(team)}.lock`); }
+  private async prepareRoot(): Promise<void> {
+    await privateDirectory(this.root);
+    await privateDirectory(join(this.root, '.locks'));
+  }
+  private async withTeamLocks<T>(teams: string[], action: () => Promise<T>): Promise<T> {
+    await this.prepareRoot();
+    const locks = [...new Set(teams.map(team => this.lockPath(team)))].sort();
+    const acquire = (index: number): Promise<T> => index === locks.length
+      ? action()
+      : withFileLock(locks[index], () => acquire(index + 1));
+    return acquire(0);
+  }
+  private recordOptions(team: string, payloadJson?: string) {
+    return { maxBytes: MAX_BYTES, lockPath: this.lockPath(team), ...(payloadJson ? { payloadJson } : {}) };
+  }
+
   private presencePath(team: string, alias: string): string {
     return join(this.path(team), 'presence', `${identifier(alias)}.json`);
   }
@@ -143,7 +160,7 @@ export class Mailbox {
    * read; business errors thrown by the action abort immediately.
    */
   private async mutate<T>(team: string, action: (state: State) => T): Promise<T> {
-    await privateDirectory(this.root);
+    await this.prepareRoot();
     try { await lstat(this.path(team)); }
     catch { throw new Error(`Unknown team "${team}". Use /team list or /team create.`); }
     await privateDirectory(this.path(team));
@@ -164,8 +181,7 @@ export class Mailbox {
       if (before === after) return result;
       if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; refusing to write');
       try {
-        await publish(this.recordPath(team), record.revision, state, this.normalize(team),
-          { maxBytes: MAX_BYTES, payloadJson: after });
+        await publish(this.recordPath(team), record.revision, state, this.normalize(team), this.recordOptions(team, after));
         await Promise.all(swept.map(member => unlink(this.presencePath(team, member.alias)).catch(() => {})));
         return result;
       } catch (error) {
@@ -178,20 +194,104 @@ export class Mailbox {
   }
 
   async create(team: string): Promise<void> {
-    await privateDirectory(this.root);
-    try { await mkdir(this.path(team), { mode: 0o700 }); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Team "${team}" already exists`);
-      throw error;
-    }
-    await publish(this.recordPath(team), 0, { version: 1, members: [], messages: [] } satisfies State,
-      this.normalize(team), { maxBytes: MAX_BYTES });
+    identifier(team);
+    await this.withTeamLocks([team], async () => {
+      const exists = await lstat(this.path(team)).then(() => true, error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      });
+      if (exists) throw new Error(`Team "${team}" already exists`);
+      await mkdir(this.path(team), { mode: 0o700 });
+      try {
+        await publishLocked(this.recordPath(team), 0, { version: 1, members: [], messages: [] } satisfies State,
+          this.normalize(team), { maxBytes: MAX_BYTES });
+      } catch (error) {
+        await rm(this.path(team), { recursive: true, force: true });
+        throw error;
+      }
+    });
   }
 
   async teams(): Promise<string[]> {
-    await privateDirectory(this.root);
+    await this.prepareRoot();
     const entries = await readdir(this.root, { withFileTypes: true });
     return entries.filter(e => e.isDirectory() && /^[a-z][a-z0-9-]{0,47}$/.test(e.name)).map(e => e.name).sort();
+  }
+
+  private async disconnectInactiveMembers(team: string, state: State): Promise<void> {
+    const presence = await this.readPresence(team);
+    const active = state.members.filter(member => member.status !== 'offline' && this.alive(member, presence));
+    if (active.length) throw new Error(`Team "${team}" has active member${active.length === 1 ? '' : 's'}: ${active.map(member => member.alias).join(', ')}`);
+    for (const member of state.members.filter(candidate => candidate.status !== 'offline')) this.disconnect(state, member);
+  }
+
+  private renameState(state: State, from: string, to: string): State {
+    return {
+      version: 1,
+      members: state.members.map(member => ({ ...member, team: member.team === from ? to : member.team })),
+      messages: state.messages.map(message => ({ ...message, team: message.team === from ? to : message.team })),
+    };
+  }
+
+  async renameTeam(from: string, to: string): Promise<void> {
+    identifier(from); identifier(to);
+    if (from === to) throw new Error('Choose a different team name.');
+    await this.withTeamLocks([from, to], async () => {
+      const sourceExists = await lstat(this.path(from)).then(() => true, error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      });
+      const targetExists = await lstat(this.path(to)).then(() => true, error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      });
+      // Recover the only partial state possible: the directory move completed,
+      // but the record still carries the old team name.
+      if (!sourceExists && targetExists) {
+        await privateDirectory(this.path(to));
+        const completed = await readRecord(this.recordPath(to), this.normalize(to), MAX_BYTES).catch(error => {
+          if ((error as Error).message === 'Invalid mailbox format: team mismatch') return undefined;
+          throw error;
+        });
+        if (completed) throw new Error(`Team "${from}" does not exist; "${to}" already exists.`);
+        const interrupted = await readRecord(this.recordPath(to), this.normalize(from), MAX_BYTES);
+        if (!interrupted) throw new Error(`Mailbox record for team "${to}" is missing; recovery required.`);
+        await this.disconnectInactiveMembers(to, interrupted.payload);
+        const recovered = this.renameState(interrupted.payload, from, to);
+        await publishLocked(this.recordPath(to), interrupted.revision, recovered, this.normalize(to),
+          { maxBytes: MAX_BYTES, currentNormalize: this.normalize(from) });
+        return;
+      }
+      if (!sourceExists) throw new Error(`Unknown team "${from}". Use /team list or /team create.`);
+      if (targetExists) throw new Error(`Team "${to}" already exists`);
+      await privateDirectory(this.path(from));
+      const record = await this.readState(from);
+      await this.disconnectInactiveMembers(from, record.payload);
+      await rename(this.path(from), this.path(to));
+      created.delete(this.path(from));
+      created.add(this.path(to));
+      const renamed = this.renameState(record.payload, from, to);
+      await publishLocked(this.recordPath(to), record.revision, renamed, this.normalize(to),
+        { maxBytes: MAX_BYTES, currentNormalize: this.normalize(from) });
+    });
+  }
+
+  async deleteTeam(team: string): Promise<void> {
+    identifier(team);
+    await this.withTeamLocks([team], async () => {
+      const exists = await lstat(this.path(team)).then(() => true, error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      });
+      if (!exists) throw new Error(`Unknown team "${team}". Use /team list or /team create.`);
+      await privateDirectory(this.path(team));
+      const record = await this.readState(team);
+      await this.disconnectInactiveMembers(team, record.payload);
+      const tombstone = join(this.root, `.deleted-${team}-${randomUUID()}`);
+      await rename(this.path(team), tombstone);
+      created.delete(this.path(team));
+      await rm(tombstone, { recursive: true, force: true });
+    });
   }
 
   async join(team: string, alias: string, session: string, cwd: string): Promise<Membership> {
@@ -217,9 +317,9 @@ export class Mailbox {
     return current;
   }
 
-  private async writePresence(member: Membership, status: 'idle' | 'busy' | 'paused'): Promise<void> {
+  private async writePresence(member: Membership, status: 'idle' | 'busy' | 'paused', createParent = true): Promise<void> {
     const text = JSON.stringify({ token: member.token, status, seen: Date.now() } satisfies Presence);
-    await writeAtomic(this.presencePath(member.team, member.alias), text, 'none');
+    await writeAtomic(this.presencePath(member.team, member.alias), text, 'none', createParent);
   }
 
   /** Lock-free heartbeat: touches only this member's own presence file. */
@@ -227,7 +327,9 @@ export class Mailbox {
     const record = await this.readState(member.team, true);
     const current = record.payload.members.find(m => m.alias === member.alias && m.token === member.token);
     if (!current || current.status === 'offline') throw new Error('Membership expired or replaced. Rejoin the team.');
-    await this.writePresence(member, status);
+    // A lifecycle operation can move/delete the team after the lock-free read.
+    // Never recreate that old directory from a late heartbeat.
+    await this.writePresence(member, status, false);
   }
 
   /**
@@ -274,6 +376,62 @@ export class Mailbox {
   /** Sweep disconnected members (interrupting their claimed work) on demand. */
   async sweep(member: Membership): Promise<void> {
     await this.mutate(member.team, state => { this.owner(state, member); });
+  }
+
+  async removeMember(member: Membership, alias: string): Promise<{ settled: number }> {
+    identifier(alias);
+    const result = await this.mutate(member.team, state => {
+      const actor = this.owner(state, member);
+      const target = state.members.find(candidate => candidate.alias === alias);
+      if (!target) throw new Error(`Unknown teammate "${alias}"`);
+      if (target.alias === actor.alias) throw new Error('Use /team leave instead of removing yourself.');
+      if (target.status !== 'offline') throw new Error(`Teammate "${alias}" is active; ask them to leave first.`);
+      const affected = state.messages.filter(message =>
+        ['pending', 'processing'].includes(message.state) &&
+        (message.to === alias || (message.from === alias && message.kind === 'request')));
+      for (const message of affected) {
+        if (message.kind === 'request' && message.to === alias) {
+          this.finish(state, message, {
+            outcome: 'interrupted',
+            body: `Teammate "${alias}" was removed. Work was not automatically retried. Review before continuing.`,
+            files: [], tests: [],
+          });
+        } else {
+          message.state = message.kind === 'request' ? 'interrupted' : 'seen';
+          delete message.claim;
+        }
+      }
+      state.members = state.members.filter(candidate => candidate.alias !== alias);
+      return { settled: affected.length };
+    });
+    await unlink(this.presencePath(member.team, alias)).catch(() => {});
+    return result;
+  }
+
+  async renameMember(member: Membership, alias: string, nextAlias: string): Promise<Membership> {
+    identifier(alias); identifier(nextAlias);
+    if (alias === nextAlias) throw new Error('Choose a different teammate alias.');
+    const renamed = await this.mutate(member.team, state => {
+      const actor = this.owner(state, member);
+      const target = state.members.find(candidate => candidate.alias === alias);
+      if (!target) throw new Error(`Unknown teammate "${alias}"`);
+      if (state.members.some(candidate => candidate.alias === nextAlias)) throw new Error(`Alias "${nextAlias}" already exists.`);
+      if (target.alias !== actor.alias && target.status !== 'offline') {
+        throw new Error(`Teammate "${alias}" is active; only that session can rename itself.`);
+      }
+      target.alias = nextAlias;
+      if (target.token === actor.token) target.seen = Date.now();
+      for (const message of state.messages) {
+        if (message.from === alias) message.from = nextAlias;
+        if (message.to === alias) message.to = nextAlias;
+      }
+      return { team: target.team, alias: target.alias, session: target.session, token: target.token };
+    });
+    if (member.alias === alias) {
+      await this.writePresence(renamed, 'idle').catch(() => {});
+    }
+    await unlink(this.presencePath(member.team, alias)).catch(() => {});
+    return renamed;
   }
 
   async leave(member: Membership): Promise<void> {
