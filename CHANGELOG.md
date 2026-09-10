@@ -1,3 +1,9 @@
+## [0.5.3](https://github.com/prjct-app/pi-team/compare/v0.5.2...v0.5.3) (2026-09-10)
+
+### Performance Improvements
+
+* stop opening a mailbox transaction on every idle tick ([#22](https://github.com/prjct-app/pi-team/issues/22)) ([561001f](https://github.com/prjct-app/pi-team/commit/561001f1fe8bb3048c005d74ef45d97e75b7ec09))
+
 ## [0.5.2](https://github.com/prjct-app/pi-team/compare/v0.5.1...v0.5.2) (2026-09-10)
 
 ### Performance Improvements
