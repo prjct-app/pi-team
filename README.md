@@ -102,6 +102,8 @@ rejoin an offline alias and see its history. Use a new alias for a different rol
 
 - `team_members`: discover the current team, without leaking lease tokens.
 - `team_send`: send `{ to, kind: "request" | "note", subject, body }`.
+- `team_status`: read-only view of outstanding work: requests you emitted still
+  unresolved, work queued for you, results awaiting your review, and presence.
 
 Tools cannot create teams, join, resume reception, change permissions, or launch
 terminals. They require membership established by you. Requests return **queued**,
@@ -134,8 +136,19 @@ inventory. A completed run is not proof of task success; review the reported out
 and changes in the recipient worktree.
 
 Results may wake the requester so it can continue coordinating, but processing a
-result never produces another automatic reply. Notes/acknowledgements never wake a
-model. User takeover during a peer task pauses reception and sends an interrupted
+result never produces another automatic reply. Delivered results quote the
+original request, and agents are instructed to verify the deliverable against it
+and reply in-thread with exactly what is missing when a result is incomplete or
+failed. Notes/acknowledgements never wake a model.
+
+While you have emitted requests that stay unresolved past five minutes, an
+automatic review turn asks your agent every minute to chase the responsible
+teammate in-thread or report the blockage to you. Reviews quiet down after three
+turns without mailbox progress and re-arm on any change; they share the
+five-turn automatic budget, never start new work, and never retry interrupted
+work on their own.
+
+User takeover during a peer task pauses reception and sends an interrupted
 notice instead of forwarding the unrelated final answer. Files observed after the
 takeover are not included. `/team leave` does not cancel the current run; quitting
 Pi or reloading while working produces an interrupted record, not a success report.
@@ -171,18 +184,31 @@ Pi or reloading while working produces an interrupted record, not a success repo
 
 ## Persistence and recovery
 
-Storage: `~/.pi/agent/teams/<team>/state.json` (respects `PI_CODING_AGENT_DIR`). Each
-team holds member leases and per-recipient inbox records in one small transactional
-JSON document. It is protected by `proper-lockfile`, written to a private temporary
-file, synced, atomically renamed and directory-synced. Files are 0600 and team
-folders 0700. Unsafe/symlinked roots or mailbox files and invalid schemas fail
-closed; corrupt files are preserved for manual recovery, not erased.
+Storage: `~/.pi/agent/teams/<team>/state.json` (respects `PI_CODING_AGENT_DIR`).
+Each team is one small JSON record stored with optimistic concurrency: readers
+never wait on a lock, and writers compare-and-swap a monotonically increasing
+revision, retrying against a fresh read on conflict. Many agents can therefore
+write at the same time instead of queueing for a team-wide lock. Every
+publication is written to a private temporary file, synced, hard-linked into a
+bounded `revisions/` history, and atomically renamed into place; the history
+doubles as recovery evidence for interrupted writes. Files are 0600 and team
+folders 0700; envelopes carry a content hash. Unsafe/symlinked roots or mailbox
+files and invalid schemas fail closed; corrupt files are preserved for manual
+recovery, not erased. Mailboxes written before envelope records migrate
+transparently on their first write.
+
+Presence lives outside the shared record: each member renews its own
+`presence/<alias>.json` every two seconds, so heartbeats add no write
+contention. Presence expires after 30 seconds, or sooner when the recorded
+process has exited. A lock abandoned by a crashed writer is reclaimed after ten
+seconds. Transient storage errors are reported but never pause reception; the
+next tick retries.
 
 Directory watchers provide prompt delivery; periodic polling recovers missed
 notifications. Watchers and timers only run for joined interactive sessions and are
-closed on shutdown. Presence renews every two seconds and expires after 30 seconds,
-or sooner when the recorded process has exited. A crashed lock holder can require
-about ten seconds before its lock is reclaimed.
+closed on shutdown. Teammates observing a disconnected peer holding a claim
+sweep it so its requester receives an interrupted result instead of waiting
+forever.
 
 Ownership tokens fence out replaced sessions. Pending messages survive disconnection.
 Claimed work is marked interrupted on disconnect/rejoin; it is **not automatically
@@ -224,11 +250,11 @@ When switching from GitHub to npm, remove the Git installation first, then insta
 
 ## Troubleshooting
 
-If a request stays queued, check `/team members`, the recipient model, pause state, and whether its editor or agent is busy. Use `/team resume` when reception pauses after its automatic turn budget.
+If a request stays queued, check `/team members`, the recipient model, pause state, and whether its editor or agent is busy. Emitted requests that age past five minutes trigger automatic review turns that chase the teammate or surface the blockage to you. Use `/team resume` when reception pauses after its automatic turn budget.
 
 ## Package and API documentation
 
-Uses public commands, tools, lifecycle events, custom messages, and persisted session entries. `proper-lockfile` is a runtime dependency; Pi libraries remain peer dependencies.
+Uses public commands, tools, lifecycle events, custom messages, and persisted session entries. Storage is self-contained (no runtime dependencies); Pi libraries remain peer dependencies.
 
 See [Package structure and compatibility](docs/package.md) for the manifest, dependency policy, shipped resources, and official references. This package follows the [official Pi package guide](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md) and [extension API guide](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/extensions.md) for the tested version.
 

@@ -194,3 +194,67 @@ test('a successfully reported task does not leave restoration unnecessarily paus
   await until(() => resumed!.received.length === 1);
   assert.match(resumed.received[0].content, /Pending task/);
 });
+
+test('aging emitted requests trigger review turns that quiet down without progress', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-review-'));
+  const pm = harness(root, 'pm', [], { reviewMs: 40, agingMs: 0 });
+  const be = harness(root, 'backend');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  be.busy(true); // The request stays pending; nothing settles it.
+  await pm.command('send backend Build the API');
+  const reviews = () => pm.received.filter(m => m.customType === 'team-review');
+  await until(() => reviews().length === 1);
+  assert.match(reviews()[0].content, /not a user message/);
+  assert.match(reviews()[0].content, /Build the API/);
+  assert.match(reviews()[0].content, /team_status/);
+  pm.busy(false); await until(() => reviews().length === 2);
+  pm.busy(false); await until(() => reviews().length === 3);
+  pm.busy(false);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(reviews().length, 3, 'Reviews quiet down while the mailbox does not change');
+});
+
+test('team_status reports outstanding work and results carry the original request', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-status-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  const status = async (h: ReturnType<typeof harness>) =>
+    JSON.parse((await h.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+  be.busy(true);
+  await pm.command('send backend Implement login endpoint');
+  await until(async () => (await status(pm)).emittedUnresolved.length === 1);
+  let view = await status(pm);
+  assert.equal(view.emittedUnresolved[0].subject, 'Implement login endpoint');
+  assert.equal(view.emittedUnresolved[0].state, 'pending');
+  view = await status(be);
+  assert.equal(view.queuedForYou.length, 1);
+  be.busy(false);
+  await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Login done' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  await until(() => pm.received.length === 1);
+  assert.match(pm.received[0].content, /Original request you emitted/);
+  assert.match(pm.received[0].content, /Implement login endpoint/);
+  view = await status(pm);
+  assert.equal(view.emittedUnresolved.length, 0, 'A completed request is no longer outstanding');
+});
+
+test('a temporarily missing mailbox record notifies but never pauses reception', async (t) => {
+  const { rename } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-transient-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  await rename(join(root, 'shop', 'state.json'), join(root, 'shop', 'state.bak'));
+  await new Promise(resolve => setTimeout(resolve, 150));
+  await rename(join(root, 'shop', 'state.bak'), join(root, 'shop', 'state.json'));
+  assert.ok(pm.notices.concat(be.notices).some(n => /missing/.test(n)), 'The outage is surfaced once');
+  await pm.command('send backend Still alive');
+  await until(() => be.received.length === 1, 8000);
+  assert.match(be.received[0].content, /Still alive/);
+});
