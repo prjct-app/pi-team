@@ -1,3 +1,13 @@
+## [0.6.0](https://github.com/prjct-app/pi-team/compare/v0.5.7...v0.6.0) (2026-09-10)
+
+### Features
+
+* manage team and member lifecycle ([0a60766](https://github.com/prjct-app/pi-team/commit/0a607661f447fa0d78bb0c100da65f68e1cf947b))
+
+### Bug Fixes
+
+* exclude current session from teammate discovery ([a4f340b](https://github.com/prjct-app/pi-team/commit/a4f340bad2a979216f2e8ef579b456355ace7003))
+
 ## [0.5.7](https://github.com/prjct-app/pi-team/compare/v0.5.6...v0.5.7) (2026-09-10)
 
 ### Bug Fixes
