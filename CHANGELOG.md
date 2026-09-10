@@ -1,3 +1,13 @@
+## [0.2.0](https://github.com/prjct-app/pi-team/compare/v0.1.3...v0.2.0) (2026-09-10)
+
+### Features
+
+* concurrent optimistic storage and agentic task follow-up ([5c247e1](https://github.com/prjct-app/pi-team/commit/5c247e1566f138a04b722d0671a1760e6276dd02)), closes [#8](https://github.com/prjct-app/pi-team/issues/8)
+
+### Bug Fixes
+
+* **release:** align conventionalcommits preset with the bundled writer ([c6ede1f](https://github.com/prjct-app/pi-team/commit/c6ede1f43a3dc8a87ff648dbefaeff7dcdb80741))
+
 # Changelog
 
 ## 0.1.3
