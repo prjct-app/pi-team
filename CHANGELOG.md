@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Align repository, documentation, and cover URLs with the npm package name.
+
 ## 0.1.2
 
 - Use a publicly accessible cover URL so npm renders the image for every visitor.
