@@ -1,3 +1,9 @@
+## [0.5.0](https://github.com/prjct-app/pi-team/compare/v0.4.4...v0.5.0) (2026-09-10)
+
+### Features
+
+* add team-wide wake command ([aced8df](https://github.com/prjct-app/pi-team/commit/aced8dfa19632349f70afe32c918744a58cb5a0e))
+
 ## [0.4.4](https://github.com/prjct-app/pi-team/compare/v0.4.3...v0.4.4) (2026-09-10)
 
 ### Bug Fixes
