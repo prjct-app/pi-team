@@ -150,15 +150,22 @@ export class Mailbox {
     for (const attempt of ATTEMPTS) {
       const record = await this.readState(team);
       const state = record.payload;
-      const before = JSON.stringify(state);
+      // The parser already produced this for the content hash. A pre-envelope
+      // record carries none, so that path serializes as before. A mismatch
+      // could only ever cause one redundant publication, never a lost write:
+      // `before` comes from the pre-action object and `after` from the
+      // post-action one, so they cannot coincide by accident.
+      const before = record.payloadJson ?? JSON.stringify(state);
       const presence = await this.readPresence(team);
       const swept = state.members.filter(member => member.status !== 'offline' && !this.alive(member, presence));
       for (const member of swept) this.disconnect(state, member);
       const result = action(state);
-      if (before === JSON.stringify(state)) return result;
+      const after = JSON.stringify(state);
+      if (before === after) return result;
       if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; refusing to write');
       try {
-        await publish(this.recordPath(team), record.revision, state, this.normalize(team), { maxBytes: MAX_BYTES });
+        await publish(this.recordPath(team), record.revision, state, this.normalize(team),
+          { maxBytes: MAX_BYTES, payloadJson: after });
         await Promise.all(swept.map(member => unlink(this.presencePath(team, member.alias)).catch(() => {})));
         return result;
       } catch (error) {
@@ -223,7 +230,14 @@ export class Mailbox {
     await this.writePresence(member, status);
   }
 
-  /** Lock-free consistent view of the record with presence-based statuses. */
+  /**
+   * Lock-free consistent view of the record with presence-based statuses.
+   *
+   * The cached read returns a shared record, and the message objects below are
+   * the record's own, not copies. Never mutate them: it would corrupt both the
+   * process-wide cache and the `payloadJson` taken alongside it. `mutate` is
+   * safe because it reads uncached.
+   */
   async snapshot(member: Membership): Promise<Snapshot> {
     const record = await this.readState(member.team, true);
     this.owner(record.payload, member);
