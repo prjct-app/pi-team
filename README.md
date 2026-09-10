@@ -13,13 +13,13 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 - Automatic task-boundary compaction before the next team turn, keeping independent sessions focused and reusable.
 - Live request-flow widget showing requester → assignee relationships, folded transcript previews, and one `/team` command surface.
 
-## Watch the introduction
+## Watch the film
 
-[Preview the 46-second introduction](https://github.com/prjct-app/pi-team/tree/main/media/introduction)
+[Preview the 33-second promotional film](https://github.com/prjct-app/pi-team/tree/main/media/introduction)
 
 [Watch or download the video](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4) · [English transcript](https://github.com/prjct-app/pi-team/blob/main/media/introduction/transcript.md) · [Subtitles](https://github.com/prjct-app/pi-team/blob/main/media/introduction/pi-team.en.srt)
 
-English synthetic narration and captions. An illustrated workflow showing team setup, queued requests, correlated results, and pausing new work.
+A short promotional film with English synthetic narration and optional captions. Independent sessions, connected progress.
 
 ## Install
 

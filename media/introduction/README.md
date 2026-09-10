@@ -1,22 +1,13 @@
-# pi-team introduction
+# pi-team promotional film
 
-[![Watch the pi-team introduction](poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4)
+[![Watch the pi-team promotional film](poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4)
 
 [Watch or download the video](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4)
 
-A 46-second illustrated introduction to pi-team for PI Agent.
+A 33-second brand film for pi-team, an extension for PI Agent. Monochrome paper artwork, oversized typography, subtle motion, and a concise benefit-led narrative consistent with the package covers.
 
-- English synthetic narration: Microsoft Edge voice `en-US-GuyNeural`, generated with edge-tts 7.2.8.
-- Original soundtrack and sound effects removed.
-- English captions burned into the picture; a subtitle track and separate SRT are also included.
-- 1920 × 1080, 30 fps, H.264 video and AAC audio, optimized for web playback.
-- Illustrative workflow based on the package documentation, not a recording of a live agent run.
+English synthetic narration. No music or sound effects. Optional English subtitle track, separate SRT, and transcript included. Conceptual promotional imagery, not a live product recording.
 
-## Files
+1920 × 1080, 30 fps, H.264 / AAC, optimized for web playback.
 
-- `pi-team-introduction.mp4`: final video.
-- `poster.png`: preview image.
-- `pi-team.en.srt`: English subtitles.
-- `transcript.md`: narration transcript.
-
-Narration tooling: https://github.com/rany2/edge-tts
+Narration: Microsoft Edge `en-US-GuyNeural`, generated with [edge-tts](https://github.com/rany2/edge-tts) 7.2.8. Paper artwork generated from the established pi-team cover reference. Typography and animation composed specifically for this film.

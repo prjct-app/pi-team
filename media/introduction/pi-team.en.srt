@@ -1,27 +1,19 @@
 1
-00:00:00,350 --> 00:00:07,833
-Meet Pi Team. Connect independent Pi Agent sessions, and keep work moving
-between them.
+00:00:00,250 --> 00:00:06,467
+Your agents work independently. Now, let them work together.
 
 2
-00:00:08,483 --> 00:00:14,567
-Create a team once. Then join each terminal with its own alias.
+00:00:06,917 --> 00:00:12,267
+Meet Pi Team. Connect your Pi Agent sessions.
 
 3
-00:00:15,217 --> 00:00:21,833
-Send a task to a teammate. It waits in the queue until that session is
-ready.
+00:00:12,717 --> 00:00:19,033
+Work moves between teammates. Results come back with context.
 
 4
-00:00:22,483 --> 00:00:28,967
-When the work finishes, a result returns to the requester, linked to the
-original task.
+00:00:19,483 --> 00:00:26,367
+Separate sessions. Connected progress. On your machine.
 
 5
-00:00:29,617 --> 00:00:37,600
-Each session keeps its own model, workspace, and conversation. Pause new
-work whenever you need to.
-
-6
-00:00:38,250 --> 00:00:45,767
-Start with Pi Team. Independent. Connected.
+00:00:26,817 --> 00:00:32,933
+Pi Team. Independent. Connected.
