@@ -12,3 +12,7 @@
 ## Package documentation
 
 Follow [docs/package.md](docs/package.md) and its versioned official references. Keep README examples consistent with registered commands, distinguish tested behavior from unverified compatibility, and verify `npm run check:package` before release.
+
+## Releases
+
+Merging a releasable change into `main` automatically publishes to npm. Use conventional commit messages and read [Automatic releases](docs/releases.md) before merging. The workflow manages versions and authenticates with npm through OIDC.
