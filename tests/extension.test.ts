@@ -452,3 +452,79 @@ test('a takeover that lands while the settle handler is queued still persists an
   assert.equal(request.length, 0, 'The claimed request is settled, not left outstanding');
   assert.equal(be.compactions.length, 0, 'A taken-over turn is not compacted as an isolated team task');
 });
+
+test('a quiet tick opens no mailbox transaction', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-quiet-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'be'); const fe = harness(root, 'fe');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await fe.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await be.emit('session_start'); await fe.emit('session_start');
+  await pm.command('create shop');
+  await pm.command('join shop pm'); await be.command('join shop backend'); await fe.command('join shop frontend');
+
+  // The two conditions that used to keep a full mailbox transaction running on
+  // every tick forever: a member recorded offline, and a peer legitimately
+  // holding a claim. Neither is something to recover from.
+  await fe.command('leave');
+  await pm.command('send backend Implement login');
+  await until(() => be.received.length === 1);
+
+  // A no-op mutation publishes nothing, so the revision cannot show the waste.
+  // What it costs is the transaction itself: an uncached full parse of the
+  // record, plus its directory syscalls and presence scan, per tick per member.
+  const { counters } = await import('../src/store.ts');
+  // Let the reads caused by the setup writes settle first: publishing a new
+  // record legitimately invalidates every reader's cache exactly once.
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const before = counters.reads;
+  // Many poll intervals (pollMs is 20 in tests), across three joined sessions.
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(counters.reads, before, 'Idle polling must not open mailbox transactions');
+});
+
+test('a note reaches a quiet session exactly once', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-notes-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'be');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  const notes = () => be.entries.filter(e => e.customType === 'team-event' && e.data?.kind === 'note').length;
+  await pm.command('note backend API contract changed');
+  await pm.command('note backend Second update');
+  await until(() => notes() === 2);
+  assert.equal(be.received.length, 0, 'Notes never start a model turn');
+  // The guard that skips the mailbox transaction must not re-deliver either.
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(notes(), 2, 'Consumed notes are not appended again by later ticks');
+});
+
+test('the widget is registered again after leaving and rejoining', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-widget-'));
+  const pm = harness(root, 'pm');
+  t.after(async () => { await pm.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm');
+  await until(() => pm.widgets.get('team')?.[0] === 'shop · pm · connected');
+  await pm.command('leave');
+  assert.equal(pm.widgets.get('team'), undefined, 'Leaving clears the widget');
+  await pm.command('join shop pm');
+  await until(() => pm.widgets.get('team')?.[0] === 'shop · pm · connected');
+});
+
+test('a session reload re-registers the widget on the new context', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-widget-reload-'));
+  const pm = harness(root, 'pm');
+  t.after(async () => { await pm.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm');
+  await until(() => pm.widgets.get('team')?.[0] === 'shop · pm · connected');
+  // Reload: Pi supplies a new context, and the restored membership renders the
+  // very same status text. Caching on text alone would skip the registration
+  // and leave the reloaded session with no widget at all.
+  pm.widgets.delete('team');
+  pm.renewContext();
+  await pm.emit('session_start', { reason: 'reload' });
+  await until(() => pm.widgets.get('team')?.[0] === 'shop · pm · connected');
+});

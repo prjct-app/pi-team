@@ -140,6 +140,8 @@ type Session = Readonly<{
   lastReview: number;
   lastRevision: number;
   quietReviews: number;
+  widgetText?: string;
+  widgetCtx?: ExtensionContext;
 }>;
 
 const INITIAL: Session = {
@@ -182,6 +184,20 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       needsCompaction, compactionSubject: needsCompaction ? compactionSubject : undefined,
     } : null);
   }
+  /**
+   * The widget is rebuilt on every tick otherwise. Keyed on context identity
+   * as well as text: `ctx` is replaced on session start and by the command
+   * handler, and a new context needs its own registration.
+   */
+  function showWidget(text: string | undefined) {
+    const { ctx, widgetText, widgetCtx } = get();
+    if (text === widgetText && ctx === widgetCtx) return;
+    set(() => ({ widgetText: text, widgetCtx: ctx }));
+    ctx?.ui.setWidget('team', text === undefined ? undefined : () => ({
+      invalidate() {},
+      render(width: number) { return [truncateToWidth(text, width)]; },
+    }));
+  }
   function stop() {
     const { timer, watcher } = get();
     if (timer) clearInterval(timer);
@@ -195,7 +211,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       needsCompaction: false, compactionSubject: '', compactionGeneration: session.compactionGeneration + 1,
     }));
     persist();
-    get().ctx?.ui.setWidget('team', undefined);
+    showWidget(undefined);
   }
   async function detach() {
     stop();
@@ -288,19 +304,16 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     }
     const snap = await box.snapshot(member);
     set(() => ({ aliases: snap.members.map(m => m.alias) }));
-    const pending = snap.messages.filter(m => m.to === member.alias && m.state === 'pending').length;
+    const inbox = snap.messages.filter(m => m.to === member.alias && m.state === 'pending');
+    const pending = inbox.length;
     const { compacting, needsCompaction, paused, active } = get();
     const status = `${member.team} · ${member.alias} · ${compacting || needsCompaction ? 'compacting' : paused ? 'paused' : !ctx.model ? 'select a model' : active ? 'working' : 'connected'}${pending ? ` · ${pending} pending` : ''}`;
-    ctx.ui.setWidget('team', () => ({
-      invalidate() {},
-      render(width: number) { return [truncateToWidth(status, width)]; },
-    }));
+    showWidget(status);
     if (get().leaving) return;
     // A disconnected peer holding a claim must be interrupted so its
-    // requester receives a result instead of waiting forever.
-    if (snap.messages.some(m => m.state === 'processing') && snap.members.some(m => m.status === 'offline')) {
-      await box.sweep(member);
-    }
+    // requester receives a result instead of waiting forever. Sweeping is a
+    // full mailbox transaction, so it runs only when it would change something.
+    if (snap.sweepable) await box.sweep(member);
     // Keep the session branch stable while Pi summarizes it. Team commands stay
     // registered, but no new peer content is appended or claimed until callback.
     if (get().compacting) return;
@@ -308,7 +321,11 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       compactPendingContext(ctx);
       return;
     }
-    for (const message of await box.notes(member)) pi.appendEntry('team-event', message);
+    // Consuming notes is a mailbox transaction too. The snapshot already lists
+    // every message addressed to this member, so it decides whether to open one.
+    if (inbox.some(m => m.kind === 'note')) {
+      for (const message of await box.notes(member)) pi.appendEntry('team-event', message);
+    }
     if (!ready()) return;
     if (get().budget >= 5) {
       if (pending) {
@@ -670,7 +687,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
         await box.leave(member).catch(notice);
       }
       set(() => ({ member: undefined, active: undefined }));
-      get().ctx?.ui.setWidget('team', undefined);
+      showWidget(undefined);
     });
   });
 }
