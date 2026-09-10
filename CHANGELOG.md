@@ -1,3 +1,9 @@
+## [0.4.4](https://github.com/prjct-app/pi-team/compare/v0.4.3...v0.4.4) (2026-09-10)
+
+### Bug Fixes
+
+* **tui:** keep team status widget minimal ([82fa70f](https://github.com/prjct-app/pi-team/commit/82fa70f4e16a82cf2d52b82f50cfe556fd653b8c))
+
 ## [0.4.3](https://github.com/prjct-app/pi-team/compare/v0.4.2...v0.4.3) (2026-09-10)
 
 ## [0.4.2](https://github.com/prjct-app/pi-team/compare/v0.4.1...v0.4.2) (2026-09-10)
