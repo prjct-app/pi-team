@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Use a publicly accessible cover URL so npm renders the image for every visitor.
+
 ## 0.1.1
 
 - Add a dedicated cover to the GitHub and npm README.
