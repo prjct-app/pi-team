@@ -6,6 +6,12 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 
 `@prjct.app/pi-team` · Team commands, messaging tools, and local mailbox storage; one extension.
 
+- Local messaging between independent Pi sessions: queued **requests**, display-only **notes**, and correlated **results**.
+- Concurrent mailbox storage: many agents write at the same time without lock failures.
+- Automatic delivery when a teammate is idle; pending work survives restarts.
+- Automatic results verified against the original request, plus periodic review turns that chase unresolved work.
+- Live status widget, folded transcript previews, and one `/team` command surface.
+
 ## Install
 
 Requires Pi installed separately and Node.js **22.19 or later**. Compatibility is tested with **Pi 0.85.1**; newer versions are not yet verified. This is an independent community package.
@@ -43,6 +49,32 @@ A note appears in the transcript without starting model work. Use `/team send re
 
 Supported on Linux/macOS with local disk storage. Native Windows, shared network filesystems, and cross-machine messaging are not supported. Tests cover simulated Pi/model boundaries and real local processes; live model coordination still requires manual acceptance.
 
+## Concepts
+
+A **team** is a named local mailbox on this machine. A session joins a team under
+an **alias**, which is its address; aliases are shared team addresses, not private
+identities. Messages come in three kinds:
+
+| Kind | Meaning |
+| --- | --- |
+| `request` | Work for a teammate. Starts a model turn when the recipient is idle, and always produces one correlated result back to the emitter. |
+| `note` | Display-only FYI. Appears in the transcript; never starts a model turn. |
+| `result` | The automatic reply to a request: outcome, final text, and observed files. Delivered to the emitter for verification. |
+
+Every message moves through visible states: `pending` (queued), `processing`
+(claimed by a live session), `completed` / `interrupted` (settled), and `seen`
+(notes already shown). The lifecycle of a request is: queued → claimed when the
+recipient is idle → worked on → result delivered to the emitter → the emitter
+verifies it against the original request and, if anything is missing, replies
+in the same thread with what remains to finish.
+
+### Status widget
+
+While joined, the footer shows a live widget:
+`team · alias · state · N pending`, where state is `connected`, `working`,
+`paused`, or `select a model`. The pending count covers everything addressed to
+you that is still queued. It is the quickest way to spot work waiting on you.
+
 ## Three terminals
 
 In the planning terminal:
@@ -66,6 +98,10 @@ In a frontend worktree or repository:
 
 Then tell PM: "Coordinate the login feature with backend and frontend. Agree on the
 API contract before implementation. Ask me before any push or deployment."
+
+Membership is restored automatically when the same Pi session is resumed or
+reloaded, so a restarted terminal rejoins its team without any command.
+`/new` and `/fork` start unaffiliated sessions on purpose.
 
 `pm` is an address, not a privileged role or an automatic persona. Give each agent
 its responsibilities in its own session. Each retains its own model, cwd,
@@ -103,7 +139,8 @@ rejoin an offline alias and see its history. Use a new alias for a different rol
 - `team_members`: discover the current team, without leaking lease tokens.
 - `team_send`: send `{ to, kind: "request" | "note", subject, body }`.
 - `team_status`: read-only view of outstanding work: requests you emitted still
-  unresolved, work queued for you, results awaiting your review, and presence.
+  unresolved (with recipient presence and age), work queued for you, results
+  awaiting your review, your currently claimed task, and teammate presence.
 
 Tools cannot create teams, join, resume reception, change permissions, or launch
 terminals. They require membership established by you. Requests return **queued**,
@@ -146,7 +183,8 @@ automatic review turn asks your agent every minute to chase the responsible
 teammate in-thread or report the blockage to you. Reviews quiet down after three
 turns without mailbox progress and re-arm on any change; they share the
 five-turn automatic budget, never start new work, and never retry interrupted
-work on their own.
+work on their own. The one-minute cadence and five-minute threshold are fixed
+defaults; they are not user-configurable yet.
 
 User takeover during a peer task pauses reception and sends an interrupted
 notice instead of forwarding the unrelated final answer. Files observed after the
@@ -250,7 +288,15 @@ When switching from GitHub to npm, remove the Git installation first, then insta
 
 ## Troubleshooting
 
-If a request stays queued, check `/team members`, the recipient model, pause state, and whether its editor or agent is busy. Emitted requests that age past five minutes trigger automatic review turns that chase the teammate or surface the blockage to you. Use `/team resume` when reception pauses after its automatic turn budget.
+| Symptom or notice | Cause and action |
+| --- | --- |
+| A request stays queued | Check `/team members`: the recipient may be busy, paused, offline, missing a selected model, or typing in its editor. After five minutes, automatic review turns chase the teammate or surface the blockage to you. |
+| `Team auto-turn limit reached` | Five automatic peer turns ran without user input. Review the transcript, then `/team resume`. |
+| `Membership expired or replaced` | Another live session took your alias, or your membership was fenced out. Rejoin with `/team join <team> <alias>`; choose a new alias if the old one is in use. |
+| `Recipient inbox full` / `Sender inbox full` | Fifty unsettled deliveries per member, with one slot reserved per outstanding request. Let the teammate drain its queue; notes are exempt from reply reservations. |
+| `Team history full (500 records)` | The team is at capacity; history is never silently deleted. Create a fresh team and rejoin. |
+| Repeated storage warnings | Transient read/write conflicts are retried automatically and never pause reception. If the same warning persists, check that the teams directory is a local disk and report the issue. |
+| A teammate went offline mid-task | Its claimed work is interrupted and the emitter receives that result; it is not replayed automatically. Review the worktree, then resend explicitly if still needed. |
 
 ## Package and API documentation
 
