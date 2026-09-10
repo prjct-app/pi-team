@@ -69,8 +69,8 @@ this package does not manage file ownership.
 | `result` | The automatic reply to a request: outcome, final text, and observed files. Delivered to the emitter for verification. |
 
 While joined, a minimal widget above the editor shows `team · alias · state`,
-where state is `connected`, `working`, `compacting`, `paused`, or `select a
-model`, plus a pending count when work is queued for you.
+where state is `connected`, `working`, `paused`, or `select a model`, plus a
+pending count when work is queued for you.
 
 Membership is restored automatically when the same Pi session is resumed or
 reloaded. `/new` and `/fork` start unaffiliated sessions on purpose.
@@ -111,8 +111,8 @@ never "task completed".
 ## How delivery works
 
 A request or result starts a turn only when the recipient is idle, has a selected
-model, no pending user message or open prompt, an empty editor, and no
-task-boundary compaction running. No running tool is interrupted.
+model, no pending user message or open prompt, and an empty editor. No running
+tool is interrupted.
 
 For each processed request the extension sends **one** result after the agent
 settles: the last assistant text capped at 3,000 characters (no thinking), up to
@@ -124,10 +124,10 @@ other processes are not enumerated, and the extension never infers test success
 from a shell command or a model claim. **A completed run is not proof of success**:
 review the reported outcome and the recipient worktree.
 
-After each task the session compacts before accepting another, so independent
-sessions stay focused. While a request you emitted stays unresolved past five
-minutes, a review turn asks your agent to chase the teammate or tell you what is
-blocked. See [Architecture](docs/architecture.md) for both mechanisms.
+Once a task result is persisted, the session can accept the next queued request.
+While a request you emitted stays unresolved past five minutes, a review turn
+asks your agent to chase the teammate or tell you what is blocked. See
+[Architecture](docs/architecture.md) for implementation details.
 
 ## Safety
 
@@ -170,7 +170,6 @@ defaults, not user-configurable yet.
 | --- | --- |
 | A request stays queued | Run `/team status`. The recipient may be busy, paused, offline, missing a model, or typing. After five minutes, review turns chase it or surface the blockage. |
 | `Team auto-turn limit reached` | Five automatic turns ran without user input. Review the transcript, then `/team resume`. |
-| Automatic compaction failed | The result was already persisted. Reception continues; Pi can still compact normally or via `/compact`. |
 | `Membership expired or replaced` | Another live session took your alias. Rejoin, choosing a new alias if the old one is in use. |
 | `Recipient inbox full` / `Sender inbox full` | Fifty unsettled deliveries per member, one slot reserved per outstanding request. Let the teammate drain; notes need no reservation. |
 | `Team history full (500 records)` | At capacity; history is never deleted. Create a fresh team and rejoin. |
