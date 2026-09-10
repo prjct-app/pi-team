@@ -1,3 +1,9 @@
+## [0.4.0](https://github.com/prjct-app/pi-team/compare/v0.3.0...v0.4.0) (2026-09-10)
+
+### Features
+
+* compact context after team tasks ([a6c44e1](https://github.com/prjct-app/pi-team/commit/a6c44e185a8a8657096d55422268ef925157be1a))
+
 ## [0.3.0](https://github.com/prjct-app/pi-team/compare/v0.2.0...v0.3.0) (2026-09-10)
 
 ### Features
