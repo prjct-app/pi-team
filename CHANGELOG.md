@@ -1,3 +1,5 @@
+## [0.5.1](https://github.com/prjct-app/pi-team/compare/v0.5.0...v0.5.1) (2026-09-10)
+
 ## [0.5.0](https://github.com/prjct-app/pi-team/compare/v0.4.4...v0.5.0) (2026-09-10)
 
 ### Features
