@@ -1,3 +1,9 @@
+## [0.5.5](https://github.com/prjct-app/pi-team/compare/v0.5.4...v0.5.5) (2026-09-10)
+
+### Performance Improvements
+
+* carry the canonical payload serialization instead of recomputing it ([#24](https://github.com/prjct-app/pi-team/issues/24)) ([340c495](https://github.com/prjct-app/pi-team/commit/340c4954358e715c6aed5e37e9f0a78f33100877))
+
 ## [0.5.4](https://github.com/prjct-app/pi-team/compare/v0.5.3...v0.5.4) (2026-09-10)
 
 ### Performance Improvements
