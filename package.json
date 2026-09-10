@@ -1,19 +1,27 @@
 {
   "name": "@prjct.app/pi-team",
   "version": "0.1.3",
-  "description": "Local, opt-in messaging between independent Pi sessions.",
+  "description": "Coordinate independent PI Agent sessions with local team messaging, queued tasks, and shared results.",
   "type": "module",
   "keywords": [
     "pi-package",
     "pi",
-    "team",
-    "agents",
-    "local"
+    "pi-agent",
+    "pi-coding-agent",
+    "pi-extension",
+    "ai-coding",
+    "developer-tools",
+    "multi-agent",
+    "agent-collaboration",
+    "messaging",
+    "task-queue",
+    "local-first"
   ],
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/prjct-app/pi-clipboard/main/docs/covers/pi-team.png"
   },
   "scripts": {
     "check": "tsc --noEmit",
