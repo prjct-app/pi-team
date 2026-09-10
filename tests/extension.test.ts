@@ -528,3 +528,64 @@ test('a session reload re-registers the widget on the new context', async (t) =>
   await pm.emit('session_start', { reason: 'reload' });
   await until(() => pm.widgets.get('team')?.[0] === 'shop · pm · connected');
 });
+
+test('the reported file list truncates at the byte boundary of a full serialization', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-files-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'be');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  await pm.command('send backend Refactor everything'); await until(() => be.received.length === 1);
+
+  // Long paths so the 31000-byte cap binds before the 50-file cap.
+  const paths = Array.from({ length: 60 }, (_, i) => `src/module-${i}/${'segment/'.repeat(70)}file.ts`);
+  for (const path of paths) await be.emit('tool_result', { toolName: 'edit', input: { path }, isError: false });
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Done' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  await until(() => pm.received.length === 1);
+
+  // Reference count, computed the way the loop used to: re-serialize per file.
+  const body = 'Done';
+  const reference = { outcome: 'completed', body, files: [] as string[], tests: [] as string[] };
+  const resolved = paths.map(path => join('/worktrees/be', path));
+  const expected = resolved.filter(file => {
+    if (reference.files.length >= 50 || file.length > 4096) return false;
+    if (Buffer.byteLength(JSON.stringify({ ...reference, files: [...reference.files, file] })) > 31000) return false;
+    reference.files.push(file);
+    return true;
+  }).length;
+
+  assert.ok(expected > 0 && expected < paths.length, 'The fixture must actually hit the cap');
+  assert.equal(pm.received[0].details.result.files.length, expected, 'Same boundary as re-serializing per file');
+  assert.match(pm.received[0].details.result.body, /File list truncated/);
+});
+
+test('the file-list cap matches a full re-serialization at every boundary', async () => {
+  const { fitFiles } = await import('../src/index.ts');
+  // The original formula, kept here as the reference the fast path must match.
+  const reference = (base: { outcome: string; body: string; files: string[]; tests: string[] }, candidates: string[]) => {
+    const report = { ...base, files: [] as string[] };
+    const truncated = candidates.some(file => {
+      if (report.files.length >= 50 || file.length > 4096) return true;
+      if (Buffer.byteLength(JSON.stringify({ ...report, files: [...report.files, file] })) > 31000) return true;
+      report.files.push(file);
+      return false;
+    });
+    return { files: report.files, truncated };
+  };
+  // Sweep path lengths so the cumulative size crosses 31000 at many different
+  // offsets: an off-by-one in the running total shows up at one of them.
+  const lengths = Array.from({ length: 120 }, (_, i) => 400 + i);
+  const mismatches = lengths.filter(length => {
+    const base = { outcome: 'completed', body: 'x'.repeat(300), files: [] as string[], tests: [] as string[] };
+    const candidates = Array.from({ length: 90 }, (_, i) => `/w/${String(i).padStart(3, '0')}/${'p'.repeat(length)}`);
+    const fast = fitFiles(base as never, candidates);
+    const slow = reference(base, candidates);
+    return fast.truncated !== slow.truncated || fast.files.length !== slow.files.length;
+  });
+  assert.deepEqual(mismatches, [], 'The running total must agree with re-serialization at every length');
+  // Non-ASCII paths encode wider than they measure in characters.
+  const unicode = Array.from({ length: 90 }, (_, i) => `/w/${i}/${'ñ→"\\\\'.repeat(90)}`);
+  const base = { outcome: 'completed', body: 'y', files: [] as string[], tests: [] as string[] };
+  assert.equal(fitFiles(base as never, unicode).files.length, reference(base, unicode).files.length);
+});

@@ -96,6 +96,24 @@ function excerptPath(path: string, limit: number): string {
   return path.length <= limit ? path : `…${path.slice(-limit)}`;
 }
 
+/**
+ * Fill a result's file list up to the serialized size cap. Each accepted path
+ * grows the encoded report by exactly its own encoding plus a separating
+ * comma, so a running total lands on the same boundary as re-serializing the
+ * whole report once per candidate, without the quadratic cost.
+ */
+export function fitFiles(base: Result, candidates: Iterable<string>): { files: string[]; truncated: boolean } {
+  const files: string[] = [];
+  const size = { bytes: Buffer.byteLength(JSON.stringify({ ...base, files: [] })) };
+  for (const file of candidates) {
+    const addition = Buffer.byteLength(JSON.stringify(file)) + (files.length ? 1 : 0);
+    if (files.length >= 50 || file.length > 4096 || size.bytes + addition > 31000) return { files, truncated: true };
+    files.push(file);
+    size.bytes += addition;
+  }
+  return { files, truncated: false };
+}
+
 /** Bound a list injected into the prompt, reporting what was left out. */
 function bounded<T>(items: T[], limit = STATUS_ITEMS): { items: T[]; omitted?: number } {
   return items.length <= limit ? { items } : { items: items.slice(0, limit), omitted: items.length - limit };
@@ -651,14 +669,12 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
         set(() => ({ outcome: 'interrupted', finalText: 'User took over the session. Subsequent output was not forwarded. Review before continuing.' }));
       }
       const { outcome, finalText, files } = get();
-      const report: Result = { outcome, body: finalText.slice(0, 3000) || `Agent turn ${outcome}; no final text. Review the recipient session.`, files: [], tests: [] };
-      for (const file of files) {
-        if (report.files.length >= 50 || file.length > 4096 || Buffer.byteLength(JSON.stringify({ ...report, files: [...report.files, file] })) > 31000) {
-          report.body += '\nFile list truncated; review the recipient session.';
-          break;
-        }
-        report.files.push(file);
-      }
+      const body = finalText.slice(0, 3000) || `Agent turn ${outcome}; no final text. Review the recipient session.`;
+      const fitted = fitFiles({ outcome, body, files: [], tests: [] }, files);
+      const report: Result = {
+        outcome, files: fitted.files, tests: [],
+        body: fitted.truncated ? `${body}\nFile list truncated; review the recipient session.` : body,
+      };
       await box.complete(member, finished.id, report);
       set(() => ({ active: undefined, ...(outcome !== 'completed' ? { paused: true } : {}) }));
       if (get().leaving) { await detach(); return false; }

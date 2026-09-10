@@ -267,3 +267,18 @@ test('only a dead member still holding a claim makes a snapshot sweepable', asyn
   const result = (await box.snapshot(pm)).messages.find(m => m.kind === 'result');
   assert.equal(result?.result?.outcome, 'interrupted', 'The requester receives an interrupted result');
 });
+
+test('a directory that becomes unsafe after a successful operation is refused again', async (t) => {
+  const { chmod } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-unsafe-later-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  await box.join('shop', 'backend', 'be', '/be');
+  // The mkdir is remembered per process, but the safety check is not: a team
+  // directory opened up after a successful join must still be refused.
+  await chmod(join(root, 'shop'), 0o777);
+  await assert.rejects(box.send(pm, { to: 'backend', kind: 'note', subject: 'FYI', body: 'x' }),
+    /Unsafe directory/, 'Validation is re-run, not cached, on every operation');
+});
