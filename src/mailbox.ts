@@ -1,11 +1,9 @@
-import * as nodeFs from 'node:fs';
-import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import lockfile from 'proper-lockfile';
+import { lstat, mkdir, readdir, readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Value } from 'typebox/value';
 import { ResultSchema, StateSchema } from './schema.ts';
+import { envelope, publish, readRecord, readRecordCached, writeAtomic, type Record as StoreRecord } from './store.ts';
 
 export type Membership = { team: string; alias: string; session: string; token: string };
 export type Member = Membership & { cwd: string; pid: number; seen: number; status: 'idle' | 'busy' | 'paused' | 'offline' };
@@ -16,8 +14,12 @@ export type Message = {
   created: number; rootId: string; parentId?: string; claim?: string; result?: Result;
 };
 export type Outgoing = { to: string; kind: 'request' | 'note'; subject: string; body: string; parentId?: string };
+export type Snapshot = { revision: number; members: Member[]; messages: Message[] };
 type State = { version: 1; members: Member[]; messages: Message[] };
+type Presence = { token: string; status: 'idle' | 'busy' | 'paused'; seen: number };
 export const LEASE_MS = 30_000;
+const MAX_BYTES = 32_000_000;
+const MAX_ATTEMPTS = 100;
 
 export function identifier(value: string): string {
   if (!/^[a-z][a-z0-9-]{0,47}$/.test(value)) {
@@ -35,82 +37,137 @@ async function privateDirectory(path: string): Promise<void> {
   }
 }
 
+/**
+ * Team mailbox on top of the single-record store. Reads are lock-free; writes
+ * compare-and-swap on the record revision and retry against a fresh read, so
+ * teammates can write concurrently instead of waiting for a team-wide lock.
+ * Presence lives in per-member files outside the record: heartbeats never
+ * touch shared state.
+ */
 export class Mailbox {
   constructor(readonly root: string) {}
 
   private path(team: string): string { return join(this.root, identifier(team)); }
-
-  private async read(team: string): Promise<State> {
-    const handle = await open(join(this.path(team), 'state.json'), constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size > 32_000_000 || (stat.mode & 0o077) !== 0 ||
-          (process.getuid && stat.uid !== process.getuid())) throw new Error('Unsafe mailbox file');
-      const data = JSON.parse(await handle.readFile('utf8')) as State;
-      if (!Value.Check(StateSchema, data)) throw new Error('Invalid mailbox format; preserved for manual recovery');
-      if (data.members.some(m => m.team !== team) || data.messages.some(m => m.team !== team)) throw new Error('Invalid mailbox format: team mismatch');
-      return data;
-    } finally { await handle.close(); }
+  private recordPath(team: string): string { return join(this.path(team), 'state.json'); }
+  private presencePath(team: string, alias: string): string {
+    return join(this.path(team), 'presence', `${identifier(alias)}.json`);
   }
 
-  private async write(team: string, state: State): Promise<void> {
-    if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; refusing to write');
-    const serialized = JSON.stringify(state);
-    if (Buffer.byteLength(serialized) > 32_000_000) throw new Error('Team storage limit exceeded');
-    const path = join(this.path(team), `${randomUUID()}.tmp`);
-    const handle = await open(path, 'wx', 0o600);
-    try {
-      await handle.writeFile(serialized);
-      await handle.sync();
-    } finally { await handle.close(); }
-    try {
-      await rename(path, join(this.path(team), 'state.json'));
-      const directory = await open(this.path(team), constants.O_RDONLY);
-      try { await directory.sync(); } finally { await directory.close(); }
-    }
-    finally { await unlink(path).catch(() => {}); }
+  /** Envelope records plus transparent migration of pre-envelope mailboxes. */
+  private normalize(team: string) {
+    return (raw: string): StoreRecord<State> => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); }
+      catch { throw new Error('Invalid mailbox format; preserved for manual recovery'); }
+      let record: StoreRecord<State>;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+          (parsed as { schemaVersion?: unknown }).schemaVersion === 1) {
+        record = envelope<State>(raw);
+      } else {
+        // Legacy mailbox without an envelope: accepted once as revision 0 and
+        // rewritten as an envelope record on the next publication.
+        if (!Value.Check(StateSchema, parsed)) throw new Error('Invalid mailbox format; preserved for manual recovery');
+        record = { revision: 0, payload: parsed as State };
+      }
+      const state = record.payload;
+      if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; preserved for manual recovery');
+      if (state.members.some(m => m.team !== team) || state.messages.some(m => m.team !== team)) {
+        throw new Error('Invalid mailbox format: team mismatch');
+      }
+      return record;
+    };
   }
 
-  private async transaction<T>(team: string, action: (state: State) => T): Promise<T> {
+  private async readState(team: string, cached = false): Promise<StoreRecord<State>> {
+    const read = cached ? readRecordCached : readRecord;
+    const record = await read(this.recordPath(team), this.normalize(team), MAX_BYTES);
+    if (record) return record;
+    try { await lstat(this.path(team)); }
+    catch { throw new Error(`Unknown team "${team}". Use /team list or /team create.`); }
+    throw new Error(`Mailbox record for team "${team}" is missing; recovery required.`);
+  }
+
+  private async readPresence(team: string): Promise<Map<string, Presence>> {
+    const map = new Map<string, Presence>();
+    let names: string[];
+    try { names = await readdir(join(this.path(team), 'presence')); }
+    catch { return map; }
+    await Promise.all(names.map(async name => {
+      if (!/^[a-z][a-z0-9-]{0,47}\.json$/.test(name)) return;
+      try {
+        const raw = await readFile(join(this.path(team), 'presence', name), 'utf8');
+        if (raw.length > 4096) return;
+        const presence = JSON.parse(raw) as Presence;
+        if (typeof presence?.seen === 'number' && typeof presence?.token === 'string' &&
+            ['idle', 'busy', 'paused'].includes(presence?.status)) {
+          map.set(name.slice(0, -'.json'.length), presence);
+        }
+      } catch { /* A presence file may be replaced or removed mid-read. */ }
+    }));
+    return map;
+  }
+
+  private alive(member: Member, presence: Map<string, Presence>): boolean {
+    const current = presence.get(member.alias);
+    const seen = current?.token === member.token ? current.seen : member.seen;
+    if (Date.now() - seen >= LEASE_MS) return false;
+    try { process.kill(member.pid, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+  }
+
+  private withStatus(member: Member, presence: Map<string, Presence>): Member {
+    if (member.status === 'offline' || !this.alive(member, presence)) return { ...member, status: 'offline' };
+    const current = presence.get(member.alias);
+    return { ...member, status: current?.token === member.token ? current.status : member.status };
+  }
+
+  /**
+   * Optimistic mutation: read lock-free, sweep disconnected members, apply the
+   * action, and compare-and-swap the record. Conflicts retry against a fresh
+   * read; business errors thrown by the action abort immediately.
+   */
+  private async mutate<T>(team: string, action: (state: State) => T): Promise<T> {
     await privateDirectory(this.root);
-    const dir = this.path(team);
-    try { await lstat(dir); } catch { throw new Error(`Unknown team "${team}". Use /team list or /team create.`); }
-    await privateDirectory(dir);
-    let compromised = false;
-    const release = await lockfile.lock(dir, {
-      // A plain object avoids jiti/Bun module-proxy invariants when the lock
-      // library caches mtime precision via a non-configurable Symbol property.
-      fs: { ...nodeFs },
-      stale: 10_000, update: 2_000,
-      retries: { retries: 200, minTimeout: 10, maxTimeout: 100, randomize: true },
-      onCompromised: () => { compromised = true; },
-    });
-    try {
-      const state = await this.read(team);
+    try { await lstat(this.path(team)); }
+    catch { throw new Error(`Unknown team "${team}". Use /team list or /team create.`); }
+    await privateDirectory(this.path(team));
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const record = await this.readState(team);
+      const state = record.payload;
       const before = JSON.stringify(state);
+      const presence = await this.readPresence(team);
+      const swept: string[] = [];
       for (const member of state.members) {
-        let alive = true;
-        try { process.kill(member.pid, 0); } catch (error) { alive = (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
-        if (member.status !== 'offline' && (!alive || Date.now() - member.seen >= LEASE_MS)) {
+        if (member.status !== 'offline' && !this.alive(member, presence)) {
           this.disconnect(state, member);
+          swept.push(member.alias);
         }
       }
       const result = action(state);
-      if (compromised) throw new Error('Mailbox lock lost; operation not committed');
-      if (before !== JSON.stringify(state)) await this.write(team, state);
-      return result;
-    } finally { await release(); }
+      if (before === JSON.stringify(state)) return result;
+      if (!Value.Check(StateSchema, state)) throw new Error('Invalid mailbox format; refusing to write');
+      try {
+        await publish(this.recordPath(team), record.revision, state, this.normalize(team), { maxBytes: MAX_BYTES });
+        await Promise.all(swept.map(alias => unlink(this.presencePath(team, alias)).catch(() => {})));
+        return result;
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== 'STALE_REVISION' && code !== 'RECORD_LOCKED') throw error;
+        await new Promise(resolve => setTimeout(resolve, 5 + Math.random() * Math.min(95, 5 + attempt * 5)));
+      }
+    }
+    throw new Error('Mailbox is busy; try again.');
   }
 
   async create(team: string): Promise<void> {
     await privateDirectory(this.root);
-    const dir = this.path(team);
-    try { await mkdir(dir, { mode: 0o700 }); }
+    try { await mkdir(this.path(team), { mode: 0o700 }); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`Team "${team}" already exists`);
       throw error;
     }
-    await this.write(team, { version: 1, members: [], messages: [] });
+    await publish(this.recordPath(team), 0, { version: 1, members: [], messages: [] } satisfies State,
+      this.normalize(team), { maxBytes: MAX_BYTES });
   }
 
   async teams(): Promise<string[]> {
@@ -121,17 +178,19 @@ export class Mailbox {
 
   async join(team: string, alias: string, session: string, cwd: string): Promise<Membership> {
     identifier(alias);
-    return this.transaction(team, state => {
+    const member = await this.mutate(team, state => {
       const existing = state.members.find(m => m.alias === alias);
       if (existing && existing.status !== 'offline' && Date.now() - existing.seen < LEASE_MS) {
         throw new Error(`Alias "${alias}" already in use. Choose another or leave from its terminal.`);
       }
       if (!existing && state.members.length >= 100) throw new Error('Team member limit reached (100)');
-      const member: Member = { team, alias, session, token: randomUUID(), cwd, pid: process.pid, seen: Date.now(), status: 'idle' };
+      const joined: Member = { team, alias, session, token: randomUUID(), cwd, pid: process.pid, seen: Date.now(), status: 'idle' };
       state.members = state.members.filter(m => m.alias !== alias);
-      state.members.push(member);
-      return member;
+      state.members.push(joined);
+      return joined;
     });
+    await this.writePresence(member, 'idle');
+    return member;
   }
 
   private owner(state: State, member: Membership): Member {
@@ -140,23 +199,56 @@ export class Mailbox {
     return current;
   }
 
+  private async writePresence(member: Membership, status: 'idle' | 'busy' | 'paused'): Promise<void> {
+    const text = JSON.stringify({ token: member.token, status, seen: Date.now() } satisfies Presence);
+    await writeAtomic(this.presencePath(member.team, member.alias), text, 'light');
+  }
+
+  /** Lock-free heartbeat: touches only this member's own presence file. */
+  async heartbeat(member: Membership, status: 'idle' | 'busy' | 'paused'): Promise<void> {
+    const record = await this.readState(member.team, true);
+    const current = record.payload.members.find(m => m.alias === member.alias && m.token === member.token);
+    if (!current || current.status === 'offline') throw new Error('Membership expired or replaced. Rejoin the team.');
+    await this.writePresence(member, status);
+  }
+
+  /** Lock-free consistent view of the record with presence-based statuses. */
+  async snapshot(member: Membership): Promise<Snapshot> {
+    const record = await this.readState(member.team, true);
+    this.owner(record.payload, member);
+    const presence = await this.readPresence(member.team);
+    return {
+      revision: record.revision,
+      members: record.payload.members.map(m => this.withStatus(m, presence)),
+      messages: record.payload.messages.filter(m => m.from === member.alias || m.to === member.alias),
+    };
+  }
+
   async members(member: Membership): Promise<Member[]> {
-    return this.transaction(member.team, state => {
-      this.owner(state, member);
-      return state.members.map(m => ({ ...m, status: Date.now() - m.seen >= LEASE_MS ? 'offline' : m.status }));
-    });
+    return (await this.snapshot(member)).members;
+  }
+
+  async history(member: Membership): Promise<Message[]> {
+    return (await this.snapshot(member)).messages;
+  }
+
+  /** Sweep disconnected members (interrupting their claimed work) on demand. */
+  async sweep(member: Membership): Promise<void> {
+    await this.mutate(member.team, state => { this.owner(state, member); });
   }
 
   async leave(member: Membership): Promise<void> {
-    await this.transaction(member.team, state => { this.disconnect(state, this.owner(state, member)); });
+    await this.mutate(member.team, state => { this.disconnect(state, this.owner(state, member)); });
+    await unlink(this.presencePath(member.team, member.alias)).catch(() => {});
   }
+
   async send(member: Membership, input: Outgoing): Promise<Message> {
     identifier(input.to);
     if (!['request', 'note'].includes(input.kind)) throw new Error('Invalid message kind');
     if (!input.subject.trim() || input.subject.length > 160 || !input.body.trim()) throw new Error('Subject and body required (subject up to 160 characters)');
     if (Buffer.byteLength(input.body, 'utf8') > 16_000) throw new Error('Message too large (maximum 16 KB)');
     if (Buffer.byteLength(JSON.stringify(input)) > 20_000) throw new Error('Serialized message too large (maximum 20 KB)');
-    return this.transaction(member.team, state => {
+    return this.mutate(member.team, state => {
       this.owner(state, member);
       if (input.to === member.alias) throw new Error('Cannot send a message to yourself');
       if (!state.members.some(m => m.alias === input.to)) throw new Error(`Unknown teammate "${input.to}"`);
@@ -185,7 +277,7 @@ export class Mailbox {
   }
 
   async notes(member: Membership): Promise<Message[]> {
-    return this.transaction(member.team, state => {
+    return this.mutate(member.team, state => {
       this.owner(state, member);
       const notes = state.messages.filter(m => m.to === member.alias && m.state === 'pending' && m.kind === 'note');
       for (const note of notes) note.state = 'seen';
@@ -195,7 +287,7 @@ export class Mailbox {
 
   async receive(member: Membership, ready: boolean): Promise<Message | undefined> {
     if (!ready) return;
-    return this.transaction(member.team, state => {
+    return this.mutate(member.team, state => {
       this.owner(state, member);
       if (state.messages.some(m => m.to === member.alias && m.state === 'processing')) return;
       const message = state.messages.find(m => m.to === member.alias && m.state === 'pending' && m.kind !== 'note');
@@ -207,7 +299,7 @@ export class Mailbox {
   }
 
   async release(member: Membership, id: string): Promise<void> {
-    await this.transaction(member.team, state => {
+    await this.mutate(member.team, state => {
       this.owner(state, member);
       const message = state.messages.find(m => m.id === id && m.claim === member.token && m.state === 'processing');
       if (!message) throw new Error('Message not claimed by this session');
@@ -217,7 +309,7 @@ export class Mailbox {
 
   async complete(member: Membership, id: string, result: Result): Promise<void> {
     if (!Value.Check(ResultSchema, result) || Buffer.byteLength(JSON.stringify(result)) > 32000) throw new Error('Invalid or oversized result report');
-    await this.transaction(member.team, state => {
+    await this.mutate(member.team, state => {
       this.owner(state, member);
       const message = state.messages.find(m => m.id === id && m.to === member.alias && m.claim === member.token);
       if (!message) throw new Error('Message not claimed by this session');
@@ -244,20 +336,4 @@ export class Mailbox {
       }
     }
   }
-
-  async heartbeat(member: Membership, status: 'idle' | 'busy' | 'paused'): Promise<void> {
-    await this.transaction(member.team, state => {
-      const current = this.owner(state, member);
-      current.seen = Date.now();
-      current.status = status;
-    });
-  }
-
-  async history(member: Membership): Promise<Message[]> {
-    return this.transaction(member.team, state => {
-      this.owner(state, member);
-      return state.messages.filter(m => m.from === member.alias || m.to === member.alias);
-    });
-  }
-
 }

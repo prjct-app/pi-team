@@ -18,10 +18,13 @@ Our user-selected scope differs deliberately:
 | --- | --- |
 | Session creation | User opens all terminals |
 | Discovery | Explicit named team and aliases |
-| Transport | Local filesystem inboxes, no broker or socket server |
+| Transport | Local filesystem records with optimistic concurrency, no broker or socket server |
+| Presence | Per-member files outside the shared record; heartbeats never lock |
+| Concurrent writes | Compare-and-swap revisions with retry; no team-wide lock |
+| Follow-up | Periodic review turns delegated to the agent, not programmatic retries |
 | Active recipient | Wait until fully idle; no between-tool steering |
 | Offline recipient | Persist to a known alias until rejoin |
-| Results | Automatic last-text reply to requests only |
+| Results | Automatic last-text reply to requests, quoted against the original request |
 | Approval | Never supplied by peers; preserve local policies |
 | Coordination | Messages only; no task board or worktree manager |
 | Limits | Bounded conversations, inboxes and automatic turns |

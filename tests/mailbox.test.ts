@@ -161,3 +161,72 @@ test('a full requester inbox rejects requests without reservable replies but sti
   assert.equal(result?.parentId, sent.id);
   assert.equal(result?.result?.outcome, 'interrupted', 'Disconnect results use the same reserved slot');
 });
+
+test('presence heartbeats keep members online without touching the shared record', async (t) => {
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-presence-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const be = await box.join('shop', 'backend', 'be', '/be');
+  const before = await readFile(join(root, 'shop', 'state.json'), 'utf8');
+  await box.heartbeat(pm, 'busy');
+  assert.equal((await box.members(be)).find(m => m.alias === 'pm')?.status, 'busy');
+  assert.equal(await readFile(join(root, 'shop', 'state.json'), 'utf8'), before, 'Heartbeats never rewrite the team record');
+  // A stale presence file marks the member offline without any write.
+  await writeFile(join(root, 'shop', 'presence', 'pm.json'),
+    JSON.stringify({ token: pm.token, status: 'idle', seen: Date.now() - 60_000 }), { mode: 0o600 });
+  assert.equal((await box.members(be)).find(m => m.alias === 'pm')?.status, 'offline');
+  // The next mutation sweeps the stale member; its presence file is removed.
+  await box.send(be, { to: 'pm', kind: 'note', subject: 'FYI', body: 'Sweep' });
+  assert.equal((await box.history(be)).length, 1);
+});
+
+test('pre-envelope mailboxes migrate transparently on the first write', async (t) => {
+  const { mkdir, readFile, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-legacy-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  // A 0.1.x mailbox: plain JSON state without an envelope or revision history.
+  await mkdir(join(root, 'shop'), { mode: 0o700 });
+  const legacy = JSON.stringify({ version: 1, members: [], messages: [] });
+  await writeFile(join(root, 'shop', 'state.json'), legacy, { mode: 0o600 });
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const be = await box.join('shop', 'backend', 'be', '/be');
+  await box.send(pm, { to: 'backend', kind: 'request', subject: 'Task', body: 'Work' });
+  assert.equal((await box.receive(be, true))?.subject, 'Task');
+  const migrated = JSON.parse(await readFile(join(root, 'shop', 'state.json'), 'utf8'));
+  assert.equal(migrated.schemaVersion, 1, 'Writes republish legacy mailboxes as envelope records');
+  assert.ok(migrated.revision >= 1);
+});
+
+test('many members writing concurrently all commit without lock errors', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-concurrent-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const writers = await Promise.all(['a1', 'a2', 'a3', 'a4', 'a5'].map(alias => box.join('shop', alias, alias, `/${alias}`)));
+  await Promise.all(writers.flatMap((writer, w) => [
+    ...Array.from({ length: 4 }, (_, i) => box.send(writer, { to: 'pm', kind: 'note', subject: `N${w}-${i}`, body: 'finding' })),
+    box.heartbeat(writer, 'busy'),
+  ]));
+  assert.equal((await box.notes(pm)).length, 20, 'No concurrent write is lost');
+});
+
+test('a snapshot reports record revision and presence-based statuses', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-snapshot-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const be = await box.join('shop', 'backend', 'be', '/be');
+  const first = await box.snapshot(pm);
+  assert.ok(first.revision >= 1);
+  assert.deepEqual(first.members.map(m => m.alias).sort(), ['backend', 'pm']);
+  const sent = await box.send(pm, { to: 'backend', kind: 'request', subject: 'Task', body: 'Work' });
+  const second = await box.snapshot(be);
+  assert.ok(second.revision > first.revision, 'Mutations advance the record revision');
+  assert.equal(second.messages.find(m => m.id === sent.id)?.state, 'pending');
+});

@@ -35,7 +35,7 @@ Third-party runtime dependencies belong in `dependencies`. Companion extensions 
 
 ## Public interfaces
 
-Uses public commands, tools, lifecycle events, custom messages, and persisted session entries. `proper-lockfile` is a runtime dependency; Pi libraries remain peer dependencies.
+Uses public commands, tools, lifecycle events, custom messages, and persisted session entries. Storage is self-contained with optimistic-concurrency records; this package has no runtime dependencies. Pi libraries remain peer dependencies.
 
 ## Published contents
 
