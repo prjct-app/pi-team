@@ -53,7 +53,9 @@ export function harness(root: string, session: string, saved: any[] = [], option
   return {
     received, notices, entries, tools, commands, renderers, widgets, compactions,
     async emit(name: string, event: unknown = {}) {
-      for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
+      const results: unknown[] = [];
+      for (const handler of handlers.get(name) ?? []) results.push(await handler(event, ctx));
+      return results;
     },
     async command(text: string) { await commands.get('team').handler(text, ctx); },
     async send(input: unknown) { return tools.get('team_send').execute('test-call', input, undefined, undefined, ctx); },

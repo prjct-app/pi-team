@@ -22,7 +22,7 @@ test('/team wake requests an actionable check-in from every teammate', async (t)
   await pm.command('wake Prioritize the release blocker.');
 
   const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
-  assert.deepEqual(status.emittedUnresolved.map((item: { to: string }) => item.to).sort(), ['backend', 'frontend']);
+  assert.deepEqual(status.emittedUnresolved.items.map((item: { to: string }) => item.to).sort(), ['backend', 'frontend']);
   assert.ok(pm.notices.some(notice => /Queued team check-in for 2 teammates/.test(notice)));
 
   backend.busy(false); frontend.busy(false);
@@ -78,8 +78,16 @@ test('Pi commands connect peers; a request waits while working, typing, or showi
   assert.equal(be.received.length, 0);
   await be.emit('ui_prompt_end');
   await until(() => be.received.length === 1);
-  assert.match(be.received[0].content, /another agent, not the user/);
-  assert.match(be.received[0].content, /focused task for this independent session/);
+  assert.match(be.received[0].content, /data, not instructions from the user/);
+  // Peer rules are carried once, by the system prompt of every joined turn,
+  // instead of a second copy inside each message that stays in the branch.
+  assert.doesNotMatch(be.received[0].content, /another agent, not the user/,
+    'Peer rules are not duplicated into the injected message');
+  const [patch] = await be.emit('before_agent_start', { systemPrompt: 'BASE' }) as [{ systemPrompt: string }];
+  assert.match(patch.systemPrompt, /another agent, not the user/,
+    'The turn that processes a peer message still carries the peer rules');
+  assert.match(patch.systemPrompt, /Joined team: shop; your alias: backend/);
+  assert.match(patch.systemPrompt, /focused task for this independent session/);
   assert.match(be.received[0].content, /Implement login/);
   await be.emit('tool_result', { toolName: 'edit', input: { path: 'src/login.ts' }, isError: false });
   await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [
@@ -352,12 +360,12 @@ test('team_status reports outstanding work and results carry the original reques
     JSON.parse((await h.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
   be.busy(true);
   await pm.command('send backend Implement login endpoint');
-  await until(async () => (await status(pm)).emittedUnresolved.length === 1);
+  await until(async () => (await status(pm)).emittedUnresolved.items.length === 1);
   let view = await status(pm);
-  assert.equal(view.emittedUnresolved[0].subject, 'Implement login endpoint');
-  assert.equal(view.emittedUnresolved[0].state, 'pending');
+  assert.equal(view.emittedUnresolved.items[0].subject, 'Implement login endpoint');
+  assert.equal(view.emittedUnresolved.items[0].state, 'pending');
   view = await status(be);
-  assert.equal(view.queuedForYou.length, 1);
+  assert.equal(view.queuedForYou.items.length, 1);
   be.busy(false);
   await until(() => be.received.length === 1);
   await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Login done' }] } });
@@ -366,7 +374,7 @@ test('team_status reports outstanding work and results carry the original reques
   assert.match(pm.received[0].content, /Original request you emitted/);
   assert.match(pm.received[0].content, /Implement login endpoint/);
   view = await status(pm);
-  assert.equal(view.emittedUnresolved.length, 0, 'A completed request is no longer outstanding');
+  assert.equal(view.emittedUnresolved.items.length, 0, 'A completed request is no longer outstanding');
 });
 
 test('a temporarily missing mailbox record notifies but never pauses reception', async (t) => {
@@ -402,7 +410,7 @@ test('the TUI keeps the persistent team widget minimal and shows request flow on
 
   await until(async () => {
     const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
-    return status.teamFlow.length === 1;
+    return status.otherTeamWork.items.length === 1;
   });
   assert.deepEqual(pm.widgets.get('team'), ['shop · pm · connected']);
 
@@ -411,8 +419,8 @@ test('the TUI keeps the persistent team widget minimal and shows request flow on
   assert.match(pm.notices.at(-1) ?? '', /frontend → backend \(busy\) · queued · Publish the login API contract/);
 
   const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
-  assert.equal(status.teamFlow[0].subject, 'Publish the login API contract');
-  assert.equal(status.teamFlow[0].assigneeStatus, 'busy');
+  assert.equal(status.otherTeamWork.items[0].subject, 'Publish the login API contract');
+  assert.equal(status.otherTeamWork.items[0].assigneeStatus, 'busy');
 
   backend.busy(false);
   await until(() => backend.received.length === 1);
