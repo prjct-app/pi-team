@@ -14,7 +14,8 @@ export type Message = {
   created: number; rootId: string; parentId?: string; claim?: string; result?: Result;
 };
 export type Outgoing = { to: string; kind: 'request' | 'note'; subject: string; body: string; parentId?: string };
-export type Snapshot = { revision: number; members: Member[]; messages: Message[] };
+export type FlowItem = Pick<Message, 'id' | 'from' | 'to' | 'subject' | 'state' | 'created'>;
+export type Snapshot = { revision: number; members: Member[]; messages: Message[]; flow: FlowItem[] };
 type State = { version: 1; members: Member[]; messages: Message[] };
 type Presence = { token: string; status: 'idle' | 'busy' | 'paused'; seen: number };
 export const LEASE_MS = 30_000;
@@ -221,6 +222,11 @@ export class Mailbox {
       revision: record.revision,
       members: record.payload.members.map(m => this.withStatus(m, presence)),
       messages: record.payload.messages.filter(m => m.from === member.alias || m.to === member.alias),
+      // Expose only the metadata needed to understand team-wide request flow;
+      // message bodies remain limited to the sender and recipient.
+      flow: record.payload.messages
+        .filter(m => m.kind === 'request' && (m.state === 'pending' || m.state === 'processing'))
+        .map(({ id, from, to, subject, state, created }) => ({ id, from, to, subject, state, created })),
     };
   }
 

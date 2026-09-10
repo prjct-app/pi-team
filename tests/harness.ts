@@ -10,6 +10,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   const received: any[] = [];
   const notices: string[] = [];
   const renderers = new Map<string, any>();
+  const widgets = new Map<string, string[]>();
   let idle = true;
   let pending = false;
   let editor = '';
@@ -20,7 +21,12 @@ export function harness(root: string, session: string, saved: any[] = [], option
     isIdle: () => idle, hasPendingMessages: () => pending,
     sessionManager: { getSessionId: () => session, getBranch: () => entries },
     ui: { notify: (s: string) => notices.push(s), getEditorText: () => editor,
-      setWidget: () => {}, setWorkingMessage: () => {},
+      setWidget: (name: string, value: undefined | string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] })) => {
+        if (!value) widgets.delete(name);
+        else if (Array.isArray(value)) widgets.set(name, value);
+        else widgets.set(name, value({}, {}).render(200));
+      },
+      setWorkingMessage: () => {},
     },
   } as unknown as ExtensionContext;
   const api = {
@@ -37,7 +43,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000 });
   return {
-    received, notices, entries, tools, commands, renderers,
+    received, notices, entries, tools, commands, renderers, widgets,
     async emit(name: string, event: unknown = {}) {
       for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
     },
