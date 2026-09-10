@@ -1,5 +1,9 @@
 # pi-team introduction
 
+[![Watch the pi-team introduction](poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4)
+
+[Watch or download the video](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4)
+
 A 46-second illustrated introduction to pi-team for PI Agent.
 
 - English synthetic narration: Microsoft Edge voice `en-US-GuyNeural`, generated with edge-tts 7.2.8.

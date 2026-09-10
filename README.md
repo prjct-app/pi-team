@@ -15,9 +15,9 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 
 ## Watch the introduction
 
-[![Watch the 46-second pi-team introduction](media/introduction/poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4)
+[Preview the 46-second introduction](https://github.com/prjct-app/pi-team/tree/main/media/introduction)
 
-[Watch or download the video](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4) · [English transcript](media/introduction/transcript.md) · [Subtitles](media/introduction/pi-team.en.srt)
+[Watch or download the video](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4) · [English transcript](https://github.com/prjct-app/pi-team/blob/main/media/introduction/transcript.md) · [Subtitles](https://github.com/prjct-app/pi-team/blob/main/media/introduction/pi-team.en.srt)
 
 English synthetic narration and captions. An illustrated workflow showing team setup, queued requests, correlated results, and pausing new work.
 
