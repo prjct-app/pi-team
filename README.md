@@ -1,43 +1,45 @@
 # pi-team
 
-Minimal local messaging between independent Pi terminals. Open your own sessions,
-assign aliases, and let them exchange requests and results. No server, terminal
-manager, shared task board, or dependency on Herdr.
+Local, opt-in messaging between independent Pi sessions.
 
-## Status
-
-Standalone package for Pi 0.85.1 on Linux/macOS. Typechecked and tested with a simulated
-Pi/model boundary and real filesystem messaging between three OS processes. Tests
-make no model API calls. Live model coordination still needs manual acceptance.
-
-Membership and message reception remain explicitly opt-in; installing the package
-does not join a team.
+`@prjct.app/pi-team` · Team commands, messaging tools, and local mailbox storage; one extension.
 
 ## Install
 
-```sh
-pi install git:github.com/prjct-app/pi-team
-```
+Requires Pi installed separately and Node.js **22.19 or later**. Compatibility is tested with **Pi 0.85.1**; newer versions are not yet verified. This is an independent community package.
 
-Restart Pi after installation. To remove it:
+Install with Pi's package manager:
 
 ```sh
-pi remove git:github.com/prjct-app/pi-team
+pi install npm:@prjct.app/pi-team
 ```
 
-The package has not been published to npm. To try the checkout without installing:
+For project-only installation, add `-l`: `pi install -l npm:@prjct.app/pi-team`. Restart Pi after installation. Do not install the same extension from both GitHub and npm: Pi treats those as different package identities.
 
-```sh
-pi -e ./index.ts
+## Usage
+
+Open two interactive Pi terminals. In the first:
+
+```text
+/team create demo
+/team join demo coordinator
 ```
 
-Pass that extension flag in **each** terminal. It does not replace your footer or
-activity extension. A joined session adds one compact status widget. The built-in
-working indicator and activity view continue to show the current phase.
+In the second:
 
-Membership is opt-in and limited to one team per session. Starting Pi alone never
-joins a team or starts peer work. Merely loading the extension discovers local team
-names; it does not launch a watcher until you join.
+```text
+/team join demo reviewer
+```
+
+Back in the first terminal:
+
+```text
+/team note reviewer Please review the current README.
+```
+
+A note appears in the transcript without starting model work. Use `/team send reviewer <task>` when you intend to queue work. Installation alone never joins a team. See the command reference below before enabling automatic reception.
+
+Supported on Linux/macOS with local disk storage. Native Windows, shared network filesystems, and cross-machine messaging are not supported. Tests cover simulated Pi/model boundaries and real local processes; live model coordination still requires manual acceptance.
 
 ## Three terminals
 
@@ -201,16 +203,46 @@ outside this prototype.
 Local disks only: shared network filesystems, containers with separate home
 directories, cross-machine transport, and native Windows are not supported here.
 
-## Development
+
+## Manage the package
+
+For an npm installation:
 
 ```sh
-npm install
-npm run check
-npm test
-npm pack --dry-run
-# Optional: installed Pi CLI + Python 3 + PTY; isolated config, no model calls
-python3 scripts/smoke-tui.py
+pi list
+pi update npm:@prjct.app/pi-team
+pi remove npm:@prjct.app/pi-team
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for branch/PR rules and
-[docs/reference.md](docs/reference.md) for the Claude Code comparison.
+Use `pi config` to enable or disable individual resources. Use `pi config -l` for project settings and add `-l` to removal when you installed locally.
+
+To pin version 0.1.0, use `pi install npm:@prjct.app/pi-team@0.1.0`. Pi skips pinned npm versions during package updates. For a Git installation, update or remove using the same `git:github.com/prjct-app/pi-team` source instead of the npm source.
+
+When switching from GitHub to npm, remove the Git installation first, then install the npm package and restart Pi.
+
+## Troubleshooting
+
+If a request stays queued, check `/team members`, the recipient model, pause state, and whether its editor or agent is busy. Use `/team resume` when reception pauses after its automatic turn budget.
+
+## Package and API documentation
+
+Uses public commands, tools, lifecycle events, custom messages, and persisted session entries. `proper-lockfile` is a runtime dependency; Pi libraries remain peer dependencies.
+
+See [Package structure and compatibility](docs/package.md) for the manifest, dependency policy, shipped resources, and official references. This package follows the [official Pi package guide](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/packages.md) and [extension API guide](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/extensions.md) for the tested version.
+
+## Development
+
+From a repository checkout:
+
+```sh
+npm ci --ignore-scripts
+npm run check
+npm test
+npm run check:package
+```
+
+Pi loads the TypeScript entry point directly; no build step is required. To try this checkout for one run, use `pi -e .`. Tests use isolated temporary state and do not call model APIs. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution rules and [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+## License
+
+[MIT](LICENSE).

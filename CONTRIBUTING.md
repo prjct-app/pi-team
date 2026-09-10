@@ -8,3 +8,7 @@
 - Keep runtime dependencies in `dependencies`; list Pi-provided packages in `peerDependencies` with a `*` range.
 - Run `npm run check`, `npm test`, and `npm pack --dry-run` before review.
 - Never push, open or merge a pull request, publish, or deploy without explicit authorization.
+
+## Package documentation
+
+Follow [docs/package.md](docs/package.md) and its versioned official references. Keep README examples consistent with registered commands, distinguish tested behavior from unverified compatibility, and verify `npm run check:package` before release.
