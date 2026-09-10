@@ -15,7 +15,7 @@ export type Message = {
 };
 export type Outgoing = { to: string; kind: 'request' | 'note'; subject: string; body: string; parentId?: string };
 export type FlowItem = Pick<Message, 'id' | 'from' | 'to' | 'subject' | 'state' | 'created'>;
-export type Snapshot = { revision: number; members: Member[]; messages: Message[]; flow: FlowItem[] };
+export type Snapshot = { revision: number; sweepable: boolean; members: Member[]; messages: Message[]; flow: FlowItem[] };
 type State = { version: 1; members: Member[]; messages: Message[] };
 type Presence = { token: string; status: 'idle' | 'busy' | 'paused'; seen: number };
 export const LEASE_MS = 30_000;
@@ -219,8 +219,17 @@ export class Mailbox {
     const record = await this.readState(member.team, true);
     this.owner(record.payload, member);
     const presence = await this.readPresence(member.team);
+    // Members the record still counts as connected but whose session is gone.
+    // Collected here so liveness is probed once per member, not twice.
+    const stale = record.payload.members.filter(m => m.status !== 'offline' && !this.alive(m, presence));
     return {
       revision: record.revision,
+      // A sweep only has an observable effect when a dead member still holds a
+      // claim: `disconnect` interrupts it so its requester gets a result.
+      // Members are never removed from the record, so "someone is offline" is
+      // permanently true once anyone leaves and cannot gate the sweep.
+      sweepable: stale.some(dead => record.payload.messages.some(
+        m => m.state === 'processing' && m.claim === dead.token && m.to === dead.alias)),
       members: record.payload.members.map(m => this.withStatus(m, presence)),
       messages: record.payload.messages.filter(m => m.from === member.alias || m.to === member.alias),
       // Expose only the metadata needed to understand team-wide request flow;

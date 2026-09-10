@@ -18,7 +18,9 @@ export function harness(root: string, session: string, saved: any[] = [], option
   let pending = false;
   let editor = '';
   let model: unknown = { id: 'simulated-model' };
-  const ctx = {
+  // A fresh object each time: Pi hands the extension a new ExtensionContext on
+  // session start, and code that caches per-context state must notice.
+  const makeContext = () => ({
     cwd: `/worktrees/${session}`, mode: 'tui', hasUI: true,
     get model() { return model; },
     isIdle: () => idle, hasPendingMessages: () => pending,
@@ -36,7 +38,8 @@ export function harness(root: string, session: string, saved: any[] = [], option
       },
       setWorkingMessage: () => {},
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionContext);
+  const context = { current: makeContext() };
   const api = {
     on: (name: string, handler: Handler) => handlers.set(name, [...handlers.get(name) ?? [], handler]),
     registerCommand: (name: string, command: unknown) => commands.set(name, command),
@@ -54,11 +57,13 @@ export function harness(root: string, session: string, saved: any[] = [], option
     received, notices, entries, tools, commands, renderers, widgets, compactions,
     async emit(name: string, event: unknown = {}) {
       const results: unknown[] = [];
-      for (const handler of handlers.get(name) ?? []) results.push(await handler(event, ctx));
+      for (const handler of handlers.get(name) ?? []) results.push(await handler(event, context.current));
       return results;
     },
-    async command(text: string) { await commands.get('team').handler(text, ctx); },
-    async send(input: unknown) { return tools.get('team_send').execute('test-call', input, undefined, undefined, ctx); },
+    async command(text: string) { await commands.get('team').handler(text, context.current); },
+    /** Simulate the new ExtensionContext Pi supplies on a session reload. */
+    renewContext() { context.current = makeContext(); },
+    async send(input: unknown) { return tools.get('team_send').execute('test-call', input, undefined, undefined, context.current); },
     busy(value: boolean) { idle = !value; },
     pending(value: boolean) { pending = value; },
     editor(value: string) { editor = value; },

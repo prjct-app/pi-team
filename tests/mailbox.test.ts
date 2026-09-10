@@ -236,3 +236,34 @@ test('a snapshot reports record revision and presence-based statuses', async (t)
   assert.equal('body' in second.flow[0], false);
   assert.equal((await box.snapshot(be)).messages.find(m => m.id === sent.id)?.state, 'pending');
 });
+
+test('only a dead member still holding a claim makes a snapshot sweepable', async (t) => {
+  const { writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-sweepable-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const be = await box.join('shop', 'backend', 'be', '/be');
+  const fe = await box.join('shop', 'frontend', 'fe', '/fe');
+
+  await box.send(pm, { to: 'backend', kind: 'request', subject: 'Task', body: 'Work' });
+  await box.receive(be, true);
+  assert.equal((await box.snapshot(pm)).sweepable, false, 'A live claim holder needs no sweep');
+
+  // A member that leaves stays in the record as offline forever. On its own
+  // that must never keep the sweep armed, or every tick pays a transaction.
+  await box.leave(fe);
+  assert.equal((await box.snapshot(pm)).sweepable, false,
+    'A departed member plus a legitimately processing peer is not sweepable');
+
+  // Now the claim holder itself goes away without releasing its claim.
+  await writeFile(join(root, 'shop', 'presence', 'backend.json'),
+    JSON.stringify({ token: be.token, status: 'idle', seen: Date.now() - 60_000 }), { mode: 0o600 });
+  assert.equal((await box.snapshot(pm)).sweepable, true, 'A dead claim holder must be swept');
+
+  await box.sweep(pm);
+  assert.equal((await box.snapshot(pm)).sweepable, false, 'Sweeping settles the claim and disarms');
+  const result = (await box.snapshot(pm)).messages.find(m => m.kind === 'result');
+  assert.equal(result?.result?.outcome, 'interrupted', 'The requester receives an interrupted result');
+});

@@ -25,6 +25,13 @@ const KEEP_REVISIONS = 32;
 
 export const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
+/**
+ * Diagnostics for the polling loop. `reads` counts full record parses, which
+ * happen once per attempted mutation and on a cache miss, never on a cache hit.
+ * A joined but idle session should leave both of these flat.
+ */
+export const counters = { reads: 0, publishes: 0 };
+
 /** Standard envelope parser: schema marker, revision, and content hash. */
 export function envelope<T>(raw: string): Record<T> {
   const parsed = JSON.parse(raw) as { schemaVersion?: unknown; revision?: unknown; contentHash?: unknown; payload?: unknown };
@@ -62,6 +69,7 @@ export async function readRecord<T>(path: string, normalize: Normalize<T>, maxBy
   if (!handle) return undefined;
   try {
     assertSafeFile(path, await handle.stat(), maxBytes);
+    counters.reads++;
     return normalize(await handle.readFile('utf8'));
   } finally { await handle.close(); }
 }
@@ -175,6 +183,7 @@ export async function publish<T>(
       if (durability === 'full') await syncDirectory(path);
     } finally { await unlink(tmp).catch(() => {}); }
     cache.delete(path);
+    counters.publishes++;
     await pruneRevisions(dirname(path), next).catch(() => {});
     return { revision: next, payload };
   } finally {
