@@ -1,3 +1,9 @@
+## [0.5.4](https://github.com/prjct-app/pi-team/compare/v0.5.3...v0.5.4) (2026-09-10)
+
+### Performance Improvements
+
+* drop the presence fsync, the quadratic file cap and a repeated mkdir ([#23](https://github.com/prjct-app/pi-team/issues/23)) ([75e5849](https://github.com/prjct-app/pi-team/commit/75e584965bd861cea96942497618f8c261c64d8d))
+
 ## [0.5.3](https://github.com/prjct-app/pi-team/compare/v0.5.2...v0.5.3) (2026-09-10)
 
 ### Performance Improvements
