@@ -299,3 +299,114 @@ test('a no-op mutation on a legacy mailbox does not rewrite the record', async (
   assert.equal(await readFile(join(root, 'shop', 'state.json'), 'utf8'), before,
     'A mutation that changes nothing must not publish a revision');
 });
+
+test('removing an offline member settles dead work and fences the removed identity', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-remove-member-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const backend = await box.join('shop', 'backend', 'backend', '/backend');
+  await assert.rejects(box.removeMember(pm, 'backend'), /active/);
+  await assert.rejects(box.renameMember(pm, 'backend', 'api'), /active/);
+  const inbound = await box.send(pm, { to: 'backend', kind: 'request', subject: 'Dead queue', body: 'Will not run' });
+  const outbound = await box.send(backend, { to: 'pm', kind: 'request', subject: 'Dead requester', body: 'No owner remains' });
+  await box.leave(backend);
+
+  const removed = await box.removeMember(pm, 'backend');
+
+  assert.equal(removed.settled, 2);
+  assert.deepEqual((await box.members(pm)).map(member => member.alias), ['pm']);
+  const history = await box.history(pm);
+  assert.equal(history.find(message => message.id === inbound.id)?.state, 'interrupted');
+  assert.equal(history.find(message => message.id === outbound.id)?.state, 'interrupted');
+  assert.equal(history.find(message => message.parentId === inbound.id)?.result?.outcome, 'interrupted');
+  await assert.rejects(box.heartbeat(backend, 'idle'), /expired or replaced/);
+});
+
+test('removing a stale claim holder preserves the interrupted result for its requester', async (t) => {
+  const { writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-remove-stale-member-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const backend = await box.join('shop', 'backend', 'backend', '/backend');
+  const task = await box.send(pm, { to: 'backend', kind: 'request', subject: 'Claimed', body: 'May be partial' });
+  await box.receive(backend, true);
+  await writeFile(join(root, 'shop', 'presence', 'backend.json'),
+    JSON.stringify({ token: backend.token, status: 'idle', seen: Date.now() - 60_000 }), { mode: 0o600 });
+
+  await box.removeMember(pm, 'backend');
+
+  const result = await box.receive(pm, true);
+  assert.equal(result?.parentId, task.id);
+  assert.equal(result?.result?.outcome, 'interrupted');
+});
+
+test('renaming a member preserves queued work under the new alias', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-rename-member-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const backend = await box.join('shop', 'backend', 'backend', '/backend');
+  const task = await box.send(pm, { to: 'backend', kind: 'request', subject: 'Keep queue', body: 'Deliver after rename' });
+  await box.leave(backend);
+
+  await box.renameMember(pm, 'backend', 'api');
+  assert.deepEqual((await box.members(pm)).map(member => member.alias), ['pm', 'api']);
+  const api = await box.join('shop', 'api', 'api', '/api');
+  assert.equal((await box.receive(api, true))?.id, task.id);
+  assert.equal((await box.history(pm)).find(message => message.id === task.id)?.to, 'api');
+});
+
+test('renaming and deleting teams require every member to be offline', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-lifecycle-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await assert.rejects(box.deleteTeam('missing'), /Unknown team/);
+  assert.deepEqual(await box.teams(), [], 'Deleting an unknown team must not create a ghost directory');
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  await assert.rejects(box.renameTeam('shop', 'store'), /active member/);
+  await assert.rejects(box.deleteTeam('shop'), /active member/);
+  await box.leave(pm);
+
+  await box.renameTeam('shop', 'store');
+  assert.deepEqual(await box.teams(), ['store']);
+  await assert.rejects(box.join('shop', 'pm', 'old', '/old'), /Unknown team/);
+  const restored = await box.join('store', 'pm', 'new', '/new');
+  assert.equal(restored.team, 'store');
+  await box.leave(restored);
+  await box.deleteTeam('store');
+  assert.deepEqual(await box.teams(), []);
+  await assert.rejects(box.join('store', 'pm', 'again', '/again'), /Unknown team/);
+});
+
+test('team rename recovers an interrupted directory move and settles stale claims', async (t) => {
+  const { rename: move, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-rename-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const backend = await box.join('shop', 'backend', 'backend', '/backend');
+  const task = await box.send(pm, { to: 'backend', kind: 'request', subject: 'Stale claim', body: 'May be partial' });
+  await box.receive(backend, true);
+  await box.leave(pm);
+  await writeFile(join(root, 'shop', 'presence', 'backend.json'),
+    JSON.stringify({ token: backend.token, status: 'idle', seen: Date.now() - 60_000 }), { mode: 0o600 });
+
+  await box.renameTeam('shop', 'store');
+  const restored = await box.join('store', 'pm', 'restored', '/restored');
+  const result = await box.receive(restored, true);
+  assert.equal(result?.parentId, task.id);
+  assert.equal(result?.result?.outcome, 'interrupted');
+
+  await box.leave(restored);
+  await move(join(root, 'store'), join(root, 'moved'));
+  await box.renameTeam('store', 'moved');
+  assert.deepEqual(await box.teams(), ['moved']);
+  assert.equal((await box.join('moved', 'pm', 'again', '/again')).team, 'moved');
+});
