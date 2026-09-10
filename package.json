@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-team",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local, opt-in messaging between independent Pi sessions.",
   "type": "module",
   "keywords": [
