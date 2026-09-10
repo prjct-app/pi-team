@@ -5,6 +5,56 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { harness, until } from './harness.ts';
 
+test('/team wake requests an actionable check-in from every teammate', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-wake-'));
+  const pm = harness(root, 'pm');
+  const backend = harness(root, 'backend');
+  const frontend = harness(root, 'frontend');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await backend.emit('session_shutdown'); await frontend.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await backend.emit('session_start'); await frontend.emit('session_start');
+  await pm.command('create shop');
+  await pm.command('join shop pm'); await backend.command('join shop backend'); await frontend.command('join shop frontend');
+  backend.busy(true); frontend.busy(true);
+
+  await pm.command('wake Prioritize the release blocker.');
+
+  const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+  assert.deepEqual(status.emittedUnresolved.map((item: { to: string }) => item.to).sort(), ['backend', 'frontend']);
+  assert.ok(pm.notices.some(notice => /Queued team check-in for 2 teammates/.test(notice)));
+
+  backend.busy(false); frontend.busy(false);
+  await until(() => backend.received.length === 1 && frontend.received.length === 1);
+  for (const message of [backend.received[0], frontend.received[0]]) {
+    assert.match(message.content, /report what you are working on, what remains, blockers, and your next concrete step/i);
+    assert.match(message.content, /use team_send to ask them directly/i);
+    assert.match(message.content, /complete any pending work you can finish/i);
+    assert.match(message.content, /Prioritize the release blocker\./);
+  }
+});
+
+test('/team wake uses the default check-in without a custom message and handles a solo team', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-wake-default-'));
+  const pm = harness(root, 'pm');
+  const backend = harness(root, 'backend');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await backend.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await backend.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm');
+  await pm.command('wake');
+  assert.equal(pm.notices.at(-1), 'No teammates to check in with.');
+
+  await backend.command('join shop backend');
+  await pm.command('wake');
+  await until(() => backend.received.length === 1);
+  assert.match(backend.received[0].content, /Team check-in:/);
+  assert.doesNotMatch(backend.received[0].content, /Sender's message:/);
+});
+
 test('Pi commands connect peers; a request waits while working, typing, or showing a dialog', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-'));
   const pm = harness(root, 'pm');

@@ -10,6 +10,7 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 - Concurrent mailbox storage: many agents write at the same time without lock failures.
 - Automatic delivery when a teammate is idle; pending work survives restarts.
 - Automatic results verified against the original request, plus periodic review turns that chase unresolved work.
+- One `/team wake [message]` command requests an actionable status check-in from every teammate.
 - Automatic task-boundary compaction before the next team turn, keeping independent sessions focused and reusable.
 - Minimal live session widget, on-demand requester → assignee status, folded transcript previews, and one `/team` command surface.
 
@@ -50,9 +51,10 @@ Back in the first terminal:
 
 ```text
 /team note reviewer Please review the current README.
+/team wake Prioritize anything blocking the release.
 ```
 
-A note appears in the transcript without starting model work. Use `/team send reviewer <task>` when you intend to queue work. Installation alone never joins a team. See the command reference below before enabling automatic reception.
+A note appears in the transcript without starting model work. Use `/team send reviewer <task>` to queue work for one teammate, or `/team wake [message]` to queue the standard actionable check-in for everyone else in the team. Installation alone never joins a team. See the command reference below before enabling automatic reception.
 
 Supported on Linux/macOS with local disk storage. Native Windows, shared network filesystems, and cross-machine messaging are not supported. Tests cover simulated Pi/model boundaries and real local processes; live model coordination still requires manual acceptance.
 
@@ -136,6 +138,7 @@ still overwrite each other's edits: this package does not manage file ownership.
 | `/team list` | List teams; refresh team-name completion |
 | `/team members` | Show aliases, cwd, and idle/busy/paused/offline status |
 | `/team status` | Show every unresolved requester → assignee relationship and task subject |
+| `/team wake [message]` | Queue an actionable check-in request for every teammate except this session; the message is optional |
 | `/team send backend Implement login` | Queue a request that can start work |
 | `/team note frontend API contract changed` | Display an FYI; never starts a model turn |
 | `/team inbox` | Show the most recent 20 sent/received records and their states |
@@ -152,6 +155,15 @@ Sending to an offline **known** alias queues work until someone explicitly rejoi
 that alias. Sending to an unknown alias fails. An alias is a shared team address,
 not a private address for a particular human; anyone using this OS account can
 rejoin an offline alias and see its history. Use a new alias for a different role.
+
+`/team wake` sends a normal request to every known teammate except the sender,
+including offline aliases. Its standard prompt asks each agent to report current
+work, remaining work, blockers, and the next concrete step; request missing input
+through `team_send`; and finish authorized pending work instead of waiting. An
+optional message is appended as sender-provided context and does not replace the
+standard safety and authorization boundaries. Each recipient returns its own
+correlated result. If any teammate cannot be queued, the command reports the
+successful count and each failed alias instead of claiming complete delivery.
 
 ### Agent tools
 
