@@ -10,7 +10,7 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 - Concurrent mailbox storage: many agents write at the same time without lock failures.
 - Automatic delivery when a teammate is idle; pending work survives restarts.
 - Automatic results verified against the original request, plus periodic review turns that chase unresolved work.
-- Live status widget, folded transcript previews, and one `/team` command surface.
+- Live request-flow widget showing requester → assignee relationships, folded transcript previews, and one `/team` command surface.
 
 ## Install
 
@@ -70,10 +70,22 @@ in the same thread with what remains to finish.
 
 ### Status widget
 
-While joined, the footer shows a live widget:
-`team · alias · state · N pending`, where state is `connected`, `working`,
-`paused`, or `select a model`. The pending count covers everything addressed to
-you that is still queued. It is the quickest way to spot work waiting on you.
+While joined, a live widget above the editor shows the session header and up to
+five unresolved requests as requester → assignee relationships:
+
+```text
+shop · pm · connected
+request flow (requester → assignee)
+• frontend → backend (busy) · queued · Publish the login API contract
+• pm → reviewer (busy) · active · Review authentication changes
+```
+
+The header state is `connected`, `working`, `paused`, or `select a model`. Its
+pending count covers everything addressed to you that is still queued. The flow
+lines identify the task subject, assignee presence, and whether the request is
+queued or active. The widget shows up to five relationships; `/team status`
+shows the complete unresolved flow. Subjects are visible team-wide for
+coordination, while request bodies remain limited to their sender and recipient.
 
 ## Three terminals
 
@@ -117,6 +129,7 @@ still overwrite each other's edits: this package does not manage file ownership.
 | `/team join shop backend` | Register this session and enable automatic reception |
 | `/team list` | List teams; refresh team-name completion |
 | `/team members` | Show aliases, cwd, and idle/busy/paused/offline status |
+| `/team status` | Show every unresolved requester → assignee relationship and task subject |
 | `/team send backend Implement login` | Queue a request that can start work |
 | `/team note frontend API contract changed` | Display an FYI; never starts a model turn |
 | `/team inbox` | Show the most recent 20 sent/received records and their states |
@@ -138,9 +151,10 @@ rejoin an offline alias and see its history. Use a new alias for a different rol
 
 - `team_members`: discover the current team, without leaking lease tokens.
 - `team_send`: send `{ to, kind: "request" | "note", subject, body }`.
-- `team_status`: read-only view of outstanding work: requests you emitted still
-  unresolved (with recipient presence and age), work queued for you, results
-  awaiting your review, your currently claimed task, and teammate presence.
+- `team_status`: read-only view of outstanding work: the team-wide unresolved
+  requester → assignee flow, requests you emitted (with recipient presence and
+  age), work queued for you, results awaiting your review, your currently
+  claimed task, and teammate presence.
 
 Tools cannot create teams, join, resume reception, change permissions, or launch
 terminals. They require membership established by you. Requests return **queued**,
@@ -290,7 +304,7 @@ When switching from GitHub to npm, remove the Git installation first, then insta
 
 | Symptom or notice | Cause and action |
 | --- | --- |
-| A request stays queued | Check `/team members`: the recipient may be busy, paused, offline, missing a selected model, or typing in its editor. After five minutes, automatic review turns chase the teammate or surface the blockage to you. |
+| A request stays queued | Check the live request-flow widget or `/team status` to identify its requester, assignee, subject, and assignee presence. The recipient may be busy, paused, offline, missing a selected model, or typing in its editor. After five minutes, automatic review turns chase the teammate or surface the blockage to you. |
 | `Team auto-turn limit reached` | Five automatic peer turns ran without user input. Review the transcript, then `/team resume`. |
 | `Membership expired or replaced` | Another live session took your alias, or your membership was fenced out. Rejoin with `/team join <team> <alias>`; choose a new alias if the old one is in use. |
 | `Recipient inbox full` / `Sender inbox full` | Fifty unsettled deliveries per member, with one slot reserved per outstanding request. Let the teammate drain its queue; notes are exempt from reply reservations. |

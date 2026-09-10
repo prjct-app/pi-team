@@ -222,11 +222,17 @@ test('a snapshot reports record revision and presence-based statuses', async (t)
   await box.create('shop');
   const pm = await box.join('shop', 'pm', 'pm', '/pm');
   const be = await box.join('shop', 'backend', 'be', '/be');
+  const frontend = await box.join('shop', 'frontend', 'frontend', '/frontend');
   const first = await box.snapshot(pm);
   assert.ok(first.revision >= 1);
-  assert.deepEqual(first.members.map(m => m.alias).sort(), ['backend', 'pm']);
-  const sent = await box.send(pm, { to: 'backend', kind: 'request', subject: 'Task', body: 'Work' });
-  const second = await box.snapshot(be);
+  assert.deepEqual(first.members.map(m => m.alias).sort(), ['backend', 'frontend', 'pm']);
+  const sent = await box.send(frontend, { to: 'backend', kind: 'request', subject: 'Task', body: 'Private implementation details' });
+  const second = await box.snapshot(pm);
   assert.ok(second.revision > first.revision, 'Mutations advance the record revision');
-  assert.equal(second.messages.find(m => m.id === sent.id)?.state, 'pending');
+  assert.equal(second.messages.find(m => m.id === sent.id), undefined, 'Unrelated message bodies remain private');
+  assert.deepEqual(second.flow.find(m => m.id === sent.id), {
+    id: sent.id, from: 'frontend', to: 'backend', subject: 'Task', state: 'pending', created: sent.created,
+  });
+  assert.equal('body' in second.flow[0], false);
+  assert.equal((await box.snapshot(be)).messages.find(m => m.id === sent.id)?.state, 'pending');
 });

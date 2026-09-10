@@ -258,3 +258,36 @@ test('a temporarily missing mailbox record notifies but never pauses reception',
   await until(() => be.received.length === 1, 8000);
   assert.match(be.received[0].content, /Still alive/);
 });
+
+test('the TUI shows team-wide requester-to-assignee blockers and offers a full status view', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-flow-'));
+  const pm = harness(root, 'pm');
+  const frontend = harness(root, 'frontend');
+  const backend = harness(root, 'backend');
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await frontend.emit('session_shutdown'); await backend.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await frontend.emit('session_start'); await backend.emit('session_start');
+  await pm.command('create shop');
+  await pm.command('join shop pm'); await frontend.command('join shop frontend');
+  backend.busy(true); await backend.command('join shop backend');
+  await frontend.command('send backend Publish the login API contract');
+
+  await until(() => pm.widgets.get('team')?.some(line => /frontend → backend/.test(line)) ?? false);
+  const widget = pm.widgets.get('team')!.join('\n');
+  assert.match(widget, /request flow \(requester → assignee\)/);
+  assert.match(widget, /frontend → backend \(busy\) · queued · Publish the login API contract/);
+
+  await pm.command('status');
+  assert.match(pm.notices.at(-1) ?? '', /Request flow \(requester → assignee\)/);
+  assert.match(pm.notices.at(-1) ?? '', /frontend → backend \(busy\)/);
+
+  const status = JSON.parse((await pm.tools.get('team_status').execute('call', {}, undefined, undefined, undefined)).content[0].text);
+  assert.equal(status.teamFlow[0].subject, 'Publish the login API contract');
+  assert.equal(status.teamFlow[0].assigneeStatus, 'busy');
+
+  backend.busy(false);
+  await until(() => backend.received.length === 1);
+  await until(() => pm.widgets.get('team')?.some(line => /frontend → backend .* · active ·/.test(line)) ?? false);
+});
