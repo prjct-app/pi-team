@@ -24,7 +24,8 @@
     "image": "https://raw.githubusercontent.com/prjct-app/pi-clipboard/main/docs/covers/pi-team.png"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && npm run check:immutable",
+    "check:immutable": "! grep -rn '\\blet\\b' src/ || (echo 'Use immutable values: no let bindings in src/' && exit 1)",
     "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs",
     "check:package": "npm pack --dry-run --ignore-scripts"
   },

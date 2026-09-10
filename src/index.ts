@@ -73,96 +73,136 @@ function flowLines(snapshot: Snapshot, limit = Number.POSITIVE_INFINITY): string
   return lines;
 }
 
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Whole-session state as immutable snapshots. Every field is replaced, never
+ * mutated in place, so each transition is a single reviewable expression.
+ * Read through `get()` at the point of use: several paths deliberately re-read
+ * after an `await` because a user prompt can land mid-transaction.
+ */
+type Session = Readonly<{
+  ctx?: ExtensionContext;
+  member?: Membership;
+  active?: Message;
+  timer?: ReturnType<typeof setInterval>;
+  watcher?: FSWatcher;
+  paused: boolean;
+  leaving: boolean;
+  closed: boolean;
+  compacting: boolean;
+  needsCompaction: boolean;
+  compactionSubject: string;
+  compactionGeneration: number;
+  prompts: number;
+  budget: number;
+  finalText: string;
+  userTakeover: boolean;
+  outcome: Result['outcome'];
+  files: ReadonlySet<string>;
+  lastError: string;
+  teamNames: readonly string[];
+  aliases: readonly string[];
+  serial: Promise<unknown>;
+  tickQueued: boolean;
+  lastHeartbeat: number;
+  lastReview: number;
+  lastRevision: number;
+  quietReviews: number;
+}>;
+
+const INITIAL: Session = {
+  paused: false, leaving: false, closed: false, compacting: false, needsCompaction: false,
+  compactionSubject: '', compactionGeneration: 0, prompts: 0, budget: 0, finalText: '',
+  userTakeover: false, outcome: 'completed', files: new Set(), lastError: '',
+  teamNames: [], aliases: [], serial: Promise.resolve(), tickQueued: false,
+  lastHeartbeat: 0, lastReview: 0, lastRevision: -1, quietReviews: 0,
+};
+
+/** Cleared on join, restore, and leave so a new membership starts unbiased. */
+const MEMBERSHIP_RESET = {
+  paused: false, leaving: false, closed: false, compacting: false, needsCompaction: false,
+  compactionSubject: '', budget: 0, lastReview: 0, quietReviews: 0, lastRevision: -1,
+} as const;
+
 export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?: number; reviewMs?: number; agingMs?: number } = {}): void {
   const box = new Mailbox(options.root ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'teams'));
   const reviewMs = options.reviewMs ?? 60_000;
   const agingMs = options.agingMs ?? 300_000;
-  let ctx: ExtensionContext | undefined;
-  let member: Membership | undefined;
-  let active: Message | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let watcher: FSWatcher | undefined;
-  let paused = false;
-  let leaving = false;
-  let closed = false;
-  let compacting = false;
-  let needsCompaction = false;
-  let compactionSubject = '';
-  let compactionGeneration = 0;
-  let prompts = 0;
-  let budget = 0;
-  let finalText = '';
-  let userTakeover = false;
-  let outcome: Result['outcome'] = 'completed';
-  let files = new Set<string>();
-  let lastError = '';
-  let teamNames: string[] = [];
-  let aliases: string[] = [];
-  let serial: Promise<unknown> = Promise.resolve();
-  let tickQueued = false;
-  let lastHeartbeat = 0;
-  let lastReview = 0;
-  let lastRevision = -1;
-  let quietReviews = 0;
+  const slot = { current: INITIAL };
+  const get = (): Session => slot.current;
+  const set = (update: (session: Session) => Partial<Session>): Session =>
+    (slot.current = { ...slot.current, ...update(slot.current) });
 
   function queue<T>(action: () => Promise<T>): Promise<T> {
-    const work = serial.then(action);
-    serial = work.catch(() => {});
+    const work = get().serial.then(action);
+    set(() => ({ serial: work.catch(() => {}) }));
     return work;
   }
   function required(): Membership {
+    const { member, leaving } = get();
     if (!member || leaving) throw new Error('Join a team first: /team join <team> <alias>');
     return member;
   }
-  function persist(pauseOnRestore = paused || !!active) {
+  function persist(pauseOnRestore = get().paused || !!get().active) {
+    const { member, leaving, needsCompaction, compactionSubject } = get();
     pi.appendEntry('team-membership', member && !leaving ? {
       team: member.team, alias: member.alias, session: member.session, paused: pauseOnRestore,
       needsCompaction, compactionSubject: needsCompaction ? compactionSubject : undefined,
     } : null);
   }
   function stop() {
+    const { timer, watcher } = get();
     if (timer) clearInterval(timer);
-    timer = undefined;
-    watcher?.close(); watcher = undefined;
+    watcher?.close();
+    set(() => ({ timer: undefined, watcher: undefined }));
+  }
+  /** Forget the current membership without leaving the mailbox. */
+  function forget() {
+    set(session => ({
+      member: undefined, active: undefined, leaving: false, compacting: false,
+      needsCompaction: false, compactionSubject: '', compactionGeneration: session.compactionGeneration + 1,
+    }));
+    persist();
+    get().ctx?.ui.setWidget('team', undefined);
   }
   async function detach() {
     stop();
+    const { member } = get();
     try { if (member) await box.leave(member); }
-    finally {
-      member = undefined; active = undefined; leaving = false; compacting = false;
-      needsCompaction = false; compactionSubject = ''; compactionGeneration++;
-      persist(); ctx?.ui.setWidget('team', undefined);
-    }
+    finally { forget(); }
   }
   function availableForCompaction(): boolean {
+    const { ctx, closed, leaving, active, compacting, prompts } = get();
     return !!ctx && !!ctx.model && !closed && !leaving && !active && !compacting && prompts === 0 && ctx.isIdle() &&
       !ctx.hasPendingMessages() && !ctx.ui.getEditorText().trim();
   }
   function ready(): boolean {
+    const { paused, needsCompaction } = get();
     return !paused && !needsCompaction && availableForCompaction();
   }
   function notice(error: unknown) {
-    const text = error instanceof Error ? error.message : String(error);
-    if (text !== lastError) ctx?.ui.notify(`Team: ${text}`, 'warning');
-    lastError = text;
+    const text = reason(error);
+    if (text !== get().lastError) get().ctx?.ui.notify(`Team: ${text}`, 'warning');
+    set(() => ({ lastError: text }));
     if (text.includes('Membership expired or replaced')) {
-      stop(); member = undefined; active = undefined; leaving = false; compacting = false;
-      needsCompaction = false; compactionSubject = ''; compactionGeneration++;
-      persist(); ctx?.ui.setWidget('team', undefined);
+      stop();
+      forget();
     }
   }
   function compactPendingContext(context: ExtensionContext) {
-    if (!needsCompaction || !availableForCompaction() || ctx !== context) return;
-    compacting = true;
-    const generation = ++compactionGeneration;
-    const subject = plain(compactionSubject).replace(/\s+/g, ' ').slice(0, 80);
+    if (!get().needsCompaction || !availableForCompaction() || get().ctx !== context) return;
+    const generation = set(session => ({
+      compacting: true, compactionGeneration: session.compactionGeneration + 1,
+    })).compactionGeneration;
+    const subject = plain(get().compactionSubject).replace(/\s+/g, ' ').slice(0, 80);
     const finish = (): boolean => {
-      if (ctx !== context || generation !== compactionGeneration) return false;
-      compacting = false;
-      needsCompaction = false;
-      compactionSubject = '';
-      if (member) persist();
-      if (!closed) enqueueTick();
+      if (get().ctx !== context || generation !== get().compactionGeneration) return false;
+      set(() => ({ compacting: false, needsCompaction: false, compactionSubject: '' }));
+      if (get().member) persist();
+      if (!get().closed) enqueueTick();
       return true;
     };
     try {
@@ -170,57 +210,63 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
         customInstructions: TASK_COMPACTION_INSTRUCTIONS,
         onComplete: finish,
         onError: error => {
-          if (finish() && !closed) {
+          if (finish() && !get().closed) {
             context.ui.notify(`Team: Automatic context compaction after “${subject}” failed; reception will continue. ${error.message}`, 'warning');
           }
         },
       });
     } catch (error) {
       if (finish()) {
-        const text = error instanceof Error ? error.message : String(error);
-        context.ui.notify(`Team: Could not start context compaction after “${subject}”; reception will continue. ${text}`, 'warning');
+        context.ui.notify(`Team: Could not start context compaction after “${subject}”; reception will continue. ${reason(error)}`, 'warning');
       }
     }
     enqueueTick();
   }
   function enqueueTick() {
+    const { closed, member, tickQueued } = get();
     if (closed || !member || tickQueued) return;
-    tickQueued = true;
+    set(() => ({ tickQueued: true }));
     // Transient storage errors are reported but never pause reception: the
     // next tick retries. Only membership loss detaches (handled in notice).
-    void queue(tick).catch(notice).finally(() => { tickQueued = false; });
+    void queue(tick).catch(notice).finally(() => { set(() => ({ tickQueued: false })); });
   }
   function start() {
     stop();
+    const { member } = get();
     if (!member) return;
-    timer = setInterval(enqueueTick, options.pollMs ?? 2000);
+    const timer = setInterval(enqueueTick, options.pollMs ?? 2000);
     timer.unref();
+    set(() => ({ timer }));
     try {
-      watcher = watch(join(box.root, member.team), (_event, filename) => {
+      const watcher = watch(join(box.root, member.team), (_event, filename) => {
         // Polling remains the source of recovery when watchers miss events.
         if (filename === 'state.json') enqueueTick();
       });
-      watcher.on('error', () => { watcher?.close(); watcher = undefined; });
+      watcher.on('error', () => { get().watcher?.close(); set(() => ({ watcher: undefined })); });
       watcher.unref();
+      set(() => ({ watcher }));
     } catch { /* Periodic polling still works on filesystems without watchers. */ }
     enqueueTick();
   }
   async function tick() {
-    if (!ctx || !member || closed) return;
+    const { ctx, member } = get();
+    if (!ctx || !member || get().closed) return;
     // Presence heartbeats write only this member's own file: no shared lock.
-    if (Date.now() - lastHeartbeat >= 2000) {
+    if (Date.now() - get().lastHeartbeat >= 2000) {
+      const { compacting, paused } = get();
       await box.heartbeat(member, compacting ? 'busy' : paused ? 'paused' : ready() ? 'idle' : 'busy');
-      lastHeartbeat = Date.now();
+      set(() => ({ lastHeartbeat: Date.now() }));
     }
     const snap = await box.snapshot(member);
-    aliases = snap.members.map(m => m.alias);
-    const pending = snap.messages.filter(m => m.to === member!.alias && m.state === 'pending').length;
+    set(() => ({ aliases: snap.members.map(m => m.alias) }));
+    const pending = snap.messages.filter(m => m.to === member.alias && m.state === 'pending').length;
+    const { compacting, needsCompaction, paused, active } = get();
     const status = `${member.team} · ${member.alias} · ${compacting || needsCompaction ? 'compacting' : paused ? 'paused' : !ctx.model ? 'select a model' : active ? 'working' : 'connected'}${pending ? ` · ${pending} pending` : ''}`;
     ctx.ui.setWidget('team', () => ({
       invalidate() {},
       render(width: number) { return [truncateToWidth(status, width)]; },
     }));
-    if (leaving) return;
+    if (get().leaving) return;
     // A disconnected peer holding a claim must be interrupted so its
     // requester receives a result instead of waiting forever.
     if (snap.messages.some(m => m.state === 'processing') && snap.members.some(m => m.status === 'offline')) {
@@ -228,15 +274,19 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     }
     // Keep the session branch stable while Pi summarizes it. Team commands stay
     // registered, but no new peer content is appended or claimed until callback.
-    if (compacting) return;
-    if (needsCompaction) {
+    if (get().compacting) return;
+    if (get().needsCompaction) {
       compactPendingContext(ctx);
       return;
     }
     for (const message of await box.notes(member)) pi.appendEntry('team-event', message);
     if (!ready()) return;
-    if (budget >= 5) {
-      if (pending) { paused = true; persist(); ctx.ui.notify('Team auto-turn limit reached. /team resume to continue.', 'info'); }
+    if (get().budget >= 5) {
+      if (pending) {
+        set(() => ({ paused: true }));
+        persist();
+        ctx.ui.notify('Team auto-turn limit reached. /team resume to continue.', 'info');
+      }
       return;
     }
     if (!pending) { await review(snap); return; }
@@ -247,8 +297,10 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     if (!message) { persist(); return; }
     // A user prompt can arrive while the filesystem transaction is in progress.
     if (!ready()) { await box.release(member, message.id); persist(); return; }
-    active = message;
-    finalText = ''; userTakeover = false; files = new Set(); outcome = 'completed'; budget++;
+    set(session => ({
+      active: message, finalText: '', userTakeover: false, files: new Set(),
+      outcome: 'completed', budget: session.budget + 1,
+    }));
     const result = message.result ? `\nReported outcome: ${message.result.outcome}\nFiles observed via edit/write: ${JSON.stringify(message.result.files)}` : '';
     // Results carry the original request so the emitter can verify the
     // deliverable against what it asked for and reply with what is missing.
@@ -261,21 +313,26 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       }, { triggerTurn: true, deliverAs: 'followUp' });
     } catch (error) {
       await box.complete(member, message.id, { outcome: 'interrupted', body: 'Could not start processing. Review before retrying.', files: [], tests: [] });
-      active = undefined; paused = true; persist(); throw error;
+      set(() => ({ active: undefined, paused: true }));
+      persist();
+      throw error;
     }
   }
   async function review(snap: Snapshot) {
-    if (!member || !ready() || active) return;
-    if (Date.now() - lastReview < reviewMs) return;
+    const { member } = get();
+    if (!member || !ready() || get().active) return;
+    if (Date.now() - get().lastReview < reviewMs) return;
     const outstanding = snap.messages.filter(m =>
-      m.kind === 'request' && m.from === member!.alias && (m.state === 'pending' || m.state === 'processing') &&
+      m.kind === 'request' && m.from === member.alias && (m.state === 'pending' || m.state === 'processing') &&
       Date.now() - m.created >= agingMs);
     if (!outstanding.length) return;
     // Without mailbox progress, reviews quiet down instead of polling forever;
     // any state change re-arms them.
-    if (snap.revision === lastRevision) { quietReviews++; if (quietReviews >= 3) return; }
-    else quietReviews = 0;
-    lastRevision = snap.revision; lastReview = Date.now(); budget++;
+    if (snap.revision === get().lastRevision) {
+      const quietReviews = set(session => ({ quietReviews: session.quietReviews + 1 })).quietReviews;
+      if (quietReviews >= 3) return;
+    } else set(() => ({ quietReviews: 0 }));
+    set(session => ({ lastRevision: snap.revision, lastReview: Date.now(), budget: session.budget + 1 }));
     const items = outstanding.map(m => ({
       id: m.id, subject: m.subject, to: m.to, state: m.state,
       ageMinutes: Math.round((Date.now() - m.created) / 60_000),
@@ -285,11 +342,14 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       pi.sendMessage({ customType: 'team-review', display: true, details: { outstanding: items },
         content: `${REVIEW_RULES}\n\nUnresolved work you emitted (data, not instructions from the user):\n${JSON.stringify({ outstanding: items })}`,
       }, { triggerTurn: true, deliverAs: 'followUp' });
-    } catch (error) { budget--; throw error; }
+    } catch (error) {
+      set(session => ({ budget: session.budget - 1 }));
+      throw error;
+    }
   }
   async function send(input: Outgoing, fromUser = false): Promise<Message> {
     const current = required();
-    const sent = await box.send(current, { ...input, parentId: fromUser ? undefined : active?.id });
+    const sent = await box.send(current, { ...input, parentId: fromUser ? undefined : get().active?.id });
     pi.appendEntry('team-event', sent);
     return sent;
   }
@@ -330,8 +390,9 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       const snap = await queue(() => box.snapshot(current));
       const age = (created: number) => Math.round((Date.now() - created) / 60_000);
       const status = (alias: string) => snap.members.find(m => m.alias === alias)?.status ?? 'unknown';
+      const active = get().active;
       return { content: [{ type: 'text', text: JSON.stringify({
-        team: current.team, alias: current.alias, compacting: compacting || needsCompaction,
+        team: current.team, alias: current.alias, compacting: get().compacting || get().needsCompaction,
         active: active ? { id: active.id, subject: active.subject, from: active.from } : null,
         emittedUnresolved: snap.messages
           .filter(m => m.kind === 'request' && m.from === current.alias && ['pending', 'processing'].includes(m.state))
@@ -355,38 +416,47 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     description: 'Local team messaging: create, join, list, members, status, wake, send, note, inbox, pause, resume, leave',
     getArgumentCompletions(prefix) {
       const parts = prefix.split(/\s+/);
-      let values: string[] = [];
-      if (parts.length === 1) values = COMMANDS;
-      else if (parts.length === 2 && parts[0] === 'join') values = teamNames;
-      else if (parts.length === 2 && ['send', 'note'].includes(parts[0])) values = aliases;
+      const values = parts.length === 1 ? COMMANDS
+        : parts.length === 2 && parts[0] === 'join' ? get().teamNames
+        : parts.length === 2 && ['send', 'note'].includes(parts[0]) ? get().aliases
+        : [];
       const stem = parts.slice(0, -1).join(' ');
       return values.filter(v => v.startsWith(parts.at(-1) ?? '')).map(v => ({ value: `${stem ? stem + ' ' : ''}${v}`, label: v }));
     },
     handler: async (args, context) => {
       if (context.mode !== 'tui') { context.ui.notify('Team membership is interactive-terminal only.', 'warning'); return; }
-      ctx = context;
+      set(() => ({ ctx: context }));
       await queue(async () => {
         const [command, a, b, ...rest] = args.trim().split(/\s+/);
+        const ui = context.ui;
         try {
           switch (command) {
-            case 'create':
+            case 'create': {
               if (!a || b) throw new Error('Usage: /team create <team>');
-              await box.create(a); teamNames = await box.teams();
-              ctx!.ui.notify(`Created ${a}. Join with /team join ${a} <alias>.`, 'info'); break;
-            case 'join':
-              if (member) throw new Error('Leave the current team before joining another.');
+              await box.create(a);
+              const teamNames = await box.teams();
+              set(() => ({ teamNames }));
+              ui.notify(`Created ${a}. Join with /team join ${a} <alias>.`, 'info'); break;
+            }
+            case 'join': {
+              if (get().member) throw new Error('Leave the current team before joining another.');
               if (!a || !b || rest.length) throw new Error('Usage: /team join <team> <alias>');
-              member = await box.join(a, b, ctx!.sessionManager.getSessionId(), ctx!.cwd);
-              paused = false; leaving = false; closed = false; needsCompaction = false; compactionSubject = '';
-              budget = 0; lastReview = 0; quietReviews = 0; lastRevision = -1; persist(); start();
-              ctx!.ui.notify(`Joined ${a} as ${b}. Requests can start model turns automatically. /team pause to stop receiving work.`, 'info'); break;
-            case 'list': teamNames = await box.teams(); ctx!.ui.notify(teamNames.join('\n') || 'No teams. Use /team create <team>.', 'info'); break;
+              const member = await box.join(a, b, context.sessionManager.getSessionId(), context.cwd);
+              set(() => ({ member, ...MEMBERSHIP_RESET }));
+              persist(); start();
+              ui.notify(`Joined ${a} as ${b}. Requests can start model turns automatically. /team pause to stop receiving work.`, 'info'); break;
+            }
+            case 'list': {
+              const teamNames = await box.teams();
+              set(() => ({ teamNames }));
+              ui.notify(teamNames.join('\n') || 'No teams. Use /team create <team>.', 'info'); break;
+            }
             case 'members':
-              ctx!.ui.notify((await box.members(required())).map(m => `${m.alias} · ${m.status} · ${m.cwd}`).join('\n'), 'info'); break;
+              ui.notify((await box.members(required())).map(m => `${m.alias} · ${m.status} · ${m.cwd}`).join('\n'), 'info'); break;
             case 'status': {
               const snap = await box.snapshot(required());
               const lines = flowLines(snap);
-              ctx!.ui.notify(lines.length
+              ui.notify(lines.length
                 ? `Request flow (requester → assignee):\n${lines.join('\n')}`
                 : 'No unresolved team requests.', 'info');
               break;
@@ -397,23 +467,25 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
               const body = custom ? `${TEAM_CHECK_IN}\n\nSender's message: ${custom}` : TEAM_CHECK_IN;
               const teammates = (await box.members(current)).filter(peer => peer.alias !== current.alias);
               if (!teammates.length) {
-                ctx!.ui.notify('No teammates to check in with.', 'info');
+                ui.notify('No teammates to check in with.', 'info');
                 break;
               }
-              const failures: string[] = [];
-              let queued = 0;
-              for (const teammate of teammates) {
+              // Sequential: each send is a mailbox transaction, and ordering
+              // keeps the queued check-ins in teammate order.
+              const outcomes = await teammates.reduce(async (previous, teammate) => {
+                const done = await previous;
                 try {
                   await send({ to: teammate.alias, kind: 'request', subject: 'Team check-in', body }, true);
-                  queued++;
+                  return [...done, { alias: teammate.alias, error: undefined as string | undefined }];
                 } catch (error) {
-                  const reason = error instanceof Error ? error.message : String(error);
-                  failures.push(`${teammate.alias}: ${reason}`);
+                  return [...done, { alias: teammate.alias, error: reason(error) }];
                 }
-              }
+              }, Promise.resolve([] as { alias: string; error?: string }[]));
+              const failures = outcomes.filter(item => item.error);
+              const queued = outcomes.length - failures.length;
               const summary = `Queued team check-in for ${queued} teammate${queued === 1 ? '' : 's'}.`;
-              if (failures.length) ctx!.ui.notify(`${summary}\nNot queued:\n${failures.join('\n')}`, 'warning');
-              else ctx!.ui.notify(summary, 'info');
+              if (failures.length) ui.notify(`${summary}\nNot queued:\n${failures.map(item => `${item.alias}: ${item.error}`).join('\n')}`, 'warning');
+              else ui.notify(summary, 'info');
               break;
             }
             case 'send': case 'note': {
@@ -425,17 +497,26 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
             case 'inbox':
               for (const message of (await box.history(required())).slice(-20)) pi.appendEntry('team-event', message);
               break;
-            case 'pause': required(); paused = true; persist(); ctx!.ui.notify('Team reception paused. Current work is not cancelled.', 'info'); break;
+            case 'pause':
+              required();
+              set(() => ({ paused: true }));
+              persist();
+              ui.notify('Team reception paused. Current work is not cancelled.', 'info'); break;
             case 'resume':
               required();
-              if (active && ctx!.isIdle()) throw new Error('A result was not persisted. Leave and rejoin to recover; review before retrying work.');
-              paused = false; budget = 0; lastError = ''; quietReviews = 0; persist(); enqueueTick(); break;
+              if (get().active && context.isIdle()) throw new Error('A result was not persisted. Leave and rejoin to recover; review before retrying work.');
+              set(() => ({ paused: false, budget: 0, lastError: '', quietReviews: 0 }));
+              persist(); enqueueTick(); break;
             case 'leave':
-              required(); paused = true;
-              if (active && !ctx!.isIdle()) { leaving = true; pi.appendEntry('team-membership', null); ctx!.ui.notify('Will leave after reporting current work. No further messages will be processed.', 'info'); }
-              else { await detach(); }
+              required();
+              set(() => ({ paused: true }));
+              if (get().active && !context.isIdle()) {
+                set(() => ({ leaving: true }));
+                pi.appendEntry('team-membership', null);
+                ui.notify('Will leave after reporting current work. No further messages will be processed.', 'info');
+              } else { await detach(); }
               break;
-            default: ctx!.ui.notify(HELP, 'info');
+            default: ui.notify(HELP, 'info');
           }
         } catch (error) { notice(error); }
       });
@@ -444,8 +525,12 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
 
   pi.on('session_start', async (event, context) => {
     if (context.mode !== 'tui') return;
-    ctx = context; closed = false; compacting = false; needsCompaction = false; compactionSubject = ''; compactionGeneration++;
-    teamNames = await box.teams();
+    set(session => ({
+      ctx: context, closed: false, compacting: false, needsCompaction: false,
+      compactionSubject: '', compactionGeneration: session.compactionGeneration + 1,
+    }));
+    const teamNames = await box.teams();
+    set(() => ({ teamNames }));
     // Only restore this exact session, never a fork's copied membership.
     const saved = context.sessionManager.getBranch().filter(e => e.type === 'custom' && e.customType === 'team-membership').at(-1);
     const data = saved?.type === 'custom' ? saved.data as {
@@ -453,39 +538,64 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     } | null : null;
     if (data?.team && data.alias && data.session === context.sessionManager.getSessionId() && event.reason !== 'fork' && event.reason !== 'new') {
       try {
-        member = await box.join(data.team, data.alias, data.session, context.cwd);
-        paused = data.paused ?? false;
-        needsCompaction = data.needsCompaction ?? false;
-        compactionSubject = needsCompaction ? data.compactionSubject ?? 'restored team task' : '';
+        const member = await box.join(data.team, data.alias, data.session, context.cwd);
+        const needsCompaction = data.needsCompaction ?? false;
+        set(() => ({
+          member,
+          paused: data.paused ?? false,
+          needsCompaction,
+          compactionSubject: needsCompaction ? data.compactionSubject ?? 'restored team task' : '',
+        }));
         persist(); start();
       } catch (error) { notice(error); }
     }
   });
-  pi.on('before_agent_start', event => member ? { systemPrompt: `${event.systemPrompt}\n\n${PEER_RULES}\nJoined team: ${member.team}; your alias: ${member.alias}.` } : undefined);
-  pi.on('ui_prompt_start', () => { prompts++; });
-  pi.on('ui_prompt_end', () => { prompts = Math.max(0, prompts - 1); enqueueTick(); });
+  pi.on('before_agent_start', event => {
+    const { member } = get();
+    return member ? { systemPrompt: `${event.systemPrompt}\n\n${PEER_RULES}\nJoined team: ${member.team}; your alias: ${member.alias}.` } : undefined;
+  });
+  pi.on('ui_prompt_start', () => { set(session => ({ prompts: session.prompts + 1 })); });
+  pi.on('ui_prompt_end', () => {
+    set(session => ({ prompts: Math.max(0, session.prompts - 1) }));
+    enqueueTick();
+  });
   pi.on('input', event => {
     if (event.source !== 'interactive') return;
-    budget = 0;
-    if (active) { userTakeover = true; paused = true; persist(); }
+    set(() => ({ budget: 0 }));
+    if (get().active) {
+      set(() => ({ userTakeover: true, paused: true }));
+      persist();
+    }
   });
   pi.on('tool_result', (event, context) => {
+    const { active, userTakeover } = get();
     if (active && !userTakeover && !event.isError && ['edit', 'write'].includes(event.toolName) && typeof event.input.path === 'string') {
-      files.add(resolve(context.cwd, event.input.path.replace(/^@/, '')));
+      const path = resolve(context.cwd, event.input.path.replace(/^@/, ''));
+      set(session => ({ files: new Set(session.files).add(path) }));
     }
   });
   pi.on('message_end', event => {
-    if (!active || event.message.role !== 'assistant') return;
-    finalText = event.message.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-    outcome = event.message.stopReason === 'aborted' ? 'interrupted' : event.message.stopReason === 'error' ? 'failed' : 'completed';
+    const message = event.message;
+    if (!get().active || message.role !== 'assistant') return;
+    // Narrowing must happen before the update closure: the callback is not
+    // evaluated in this control-flow branch as far as the compiler is concerned.
+    const finalText = message.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+    const outcome: Result['outcome'] =
+      message.stopReason === 'aborted' ? 'interrupted' : message.stopReason === 'error' ? 'failed' : 'completed';
+    set(() => ({ finalText, outcome }));
   });
   pi.on('agent_settled', async (_event, context) => {
-    let shouldCompact = false;
-    await queue(async () => {
-      if (!member || !active) return;
+    const shouldCompact = await queue(async () => {
+      const { member, active } = get();
+      if (!member || !active) return false;
       const finished = active;
-      const takenOver = userTakeover;
-      if (takenOver) { outcome = 'interrupted'; finalText = 'User took over the session. Subsequent output was not forwarded. Review before continuing.'; }
+      // Read the latest takeover flag: an interactive prompt can land while
+      // this handler waits behind the serial queue.
+      const takenOver = get().userTakeover;
+      if (takenOver) {
+        set(() => ({ outcome: 'interrupted', finalText: 'User took over the session. Subsequent output was not forwarded. Review before continuing.' }));
+      }
+      const { outcome, finalText, files } = get();
       const report: Result = { outcome, body: finalText.slice(0, 3000) || `Agent turn ${outcome}; no final text. Review the recipient session.`, files: [], tests: [] };
       for (const file of files) {
         if (report.files.length >= 50 || file.length > 4096 || Buffer.byteLength(JSON.stringify({ ...report, files: [...report.files, file] })) > 31000) {
@@ -495,32 +605,34 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
         report.files.push(file);
       }
       await box.complete(member, finished.id, report);
-      active = undefined;
-      if (outcome !== 'completed') paused = true;
-      if (leaving) await detach();
-      else {
-        persist();
-        // Result persistence is the task boundary. Compact both executed
-        // requests and result-review turns before accepting another peer turn.
-        if (!takenOver) {
-          needsCompaction = true;
-          compactionSubject = finished.subject;
-          persist();
-          shouldCompact = true;
-        }
-      }
-    }).catch(error => { paused = true; notice(error); });
+      set(() => ({ active: undefined, ...(outcome !== 'completed' ? { paused: true } : {}) }));
+      if (get().leaving) { await detach(); return false; }
+      persist();
+      // Result persistence is the task boundary. Compact both executed
+      // requests and result-review turns before accepting another peer turn.
+      if (takenOver) return false;
+      set(() => ({ needsCompaction: true, compactionSubject: finished.subject }));
+      persist();
+      return true;
+    }).catch(error => {
+      set(() => ({ paused: true }));
+      notice(error);
+      return false;
+    });
     if (shouldCompact) compactPendingContext(context);
     enqueueTick();
   });
   pi.on('session_shutdown', async () => {
-    closed = true; compacting = false; compactionGeneration++; stop();
+    set(session => ({ closed: true, compacting: false, compactionGeneration: session.compactionGeneration + 1 }));
+    stop();
     await queue(async () => {
+      const { member, active, leaving } = get();
       if (member) {
-        if (active && !leaving) { paused = true; persist(); }
+        if (active && !leaving) { set(() => ({ paused: true })); persist(); }
         await box.leave(member).catch(notice);
       }
-      member = undefined; active = undefined; ctx?.ui.setWidget('team', undefined);
+      set(() => ({ member: undefined, active: undefined }));
+      get().ctx?.ui.setWidget('team', undefined);
     });
   });
 }

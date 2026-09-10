@@ -418,3 +418,29 @@ test('the TUI keeps the persistent team widget minimal and shows request flow on
   await until(() => backend.received.length === 1);
   assert.deepEqual(pm.widgets.get('team'), ['shop · pm · connected']);
 });
+
+test('a takeover that lands while the settle handler is queued still persists an interrupted result', async (t) => {
+  const { Mailbox } = await import('../src/mailbox.ts');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-takeover-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'be');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  await pm.command('send backend Implement login'); await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Finished the login work' }] } });
+  // The settle handler must observe the takeover recorded after it was queued,
+  // not the value captured when it started waiting.
+  be.busy(false);
+  const settled = be.emit('agent_settled');
+  await be.emit('input', { source: 'interactive', text: 'Actually stop, do my thing instead.' });
+  await settled;
+  await until(() => pm.received.length === 1);
+  assert.match(pm.received[0].content, /User took over/);
+  assert.doesNotMatch(pm.received[0].content, /Finished the login work/);
+  // The durable mailbox outcome, not just the forwarded text, must record it.
+  const box = new Mailbox(root);
+  const observer = await box.join('shop', 'observer', 'observer', '/observer');
+  const request = (await box.snapshot(observer)).flow;
+  assert.equal(request.length, 0, 'The claimed request is settled, not left outstanding');
+  assert.equal(be.compactions.length, 0, 'A taken-over turn is not compacted as an isolated team task');
+});
