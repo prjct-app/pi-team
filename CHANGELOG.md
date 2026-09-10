@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Add a dedicated cover to the GitHub and npm README.
+- Keep the existing extension behavior unchanged.
+
 ## 0.1.0
 
 - Set the npm package identity to `@prjct.app/pi-team`.
