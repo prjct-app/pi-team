@@ -110,9 +110,8 @@ async function syncDirectory(path: string): Promise<void> {
 }
 
 /** Atomic last-writer-wins write for records without revision history (presence). */
-export async function writeAtomic(path: string, text: string, durability: Durability = 'full'): Promise<void> {
-  // Always: the presence directory does not exist before its first write.
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+export async function writeAtomic(path: string, text: string, durability: Durability = 'full', createParent = true): Promise<void> {
+  if (createParent) await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${randomUUID()}.tmp`;
   const handle = await open(tmp, 'wx', 0o600);
   try {
@@ -151,6 +150,17 @@ async function acquireLock(lockPath: string) {
   return await tryLock(lockPath) ?? (() => { throw locked(); })();
 }
 
+/** Run one storage operation while holding a caller-chosen private lock. */
+export async function withFileLock<T>(lockPath: string, action: () => Promise<T>): Promise<T> {
+  await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
+  const lock = await acquireLock(lockPath);
+  try { return await action(); }
+  finally {
+    await lock.close();
+    await unlink(lockPath).catch(() => {});
+  }
+}
+
 async function pruneRevisions(dir: string, latest: number): Promise<void> {
   const revisionsDir = join(dir, 'revisions');
   const names = await readdir(revisionsDir).catch(() => [] as string[]);
@@ -163,51 +173,58 @@ async function pruneRevisions(dir: string, latest: number): Promise<void> {
 }
 
 /**
+ * Publication body for callers that already hold the record's lock. It still
+ * checks the expected revision, but does not acquire or release a lock itself.
+ */
+export async function publishLocked<T>(
+  path: string, expectedRevision: number, payload: T, normalize: Normalize<T>,
+  options: { maxBytes: number; durability?: Durability; payloadJson?: string; currentNormalize?: Normalize<T> },
+): Promise<Record<T>> {
+  const durability = options.durability ?? 'full';
+  // Check the revision before creating a missing parent. A stale writer racing
+  // a team deletion must fail rather than recreate an empty ghost directory.
+  const current = await readRecord(path, options.currentNormalize ?? normalize, options.maxBytes);
+  const revision = current?.revision ?? 0;
+  if (revision !== expectedRevision) {
+    throw Object.assign(new Error(`Record changed before the write; current revision is ${revision}.`), { code: 'STALE_REVISION' });
+  }
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const next = revision + 1;
+  // Supplied by callers that already serialized this exact object; it must
+  // equal JSON.stringify(payload). The record stays self-consistent either
+  // way, because the hash is taken over the string that gets embedded.
+  const payloadJson = options.payloadJson ?? JSON.stringify(payload);
+  const text = `{"schemaVersion":1,"revision":${next},"contentHash":"${sha256(payloadJson)}","payload":${payloadJson}}`;
+  if (Buffer.byteLength(text) > options.maxBytes) throw new Error('Record size limit exceeded.');
+  const historyPath = join(dirname(path), 'revisions', `${next}.json`);
+  const previous = await readRecord(historyPath, (raw: string) => envelope<T>(raw), options.maxBytes);
+  if (previous && (previous.revision !== next || (previous.payloadJson ?? JSON.stringify(previous.payload)) !== payloadJson)) {
+    throw new Error('An interrupted publication owns this revision; explicit recovery is required.');
+  }
+  if (!previous) await writeAtomic(historyPath, text, durability);
+  // Point `path` at the inode already holding the history copy: one write
+  // per publication, and the current record shares bytes with its revision.
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  await link(historyPath, tmp);
+  try {
+    await rename(tmp, path);
+    if (durability === 'full') await syncDirectory(path);
+  } finally { await unlink(tmp).catch(() => {}); }
+  cache.delete(path);
+  counters.publishes++;
+  await pruneRevisions(dirname(path), next).catch(() => {});
+  return { revision: next, payload, payloadJson };
+}
+
+/**
  * Compare-and-swap publication. Fails fast with STALE_REVISION when the record
  * moved since the caller's read, or RECORD_LOCKED while another writer holds
  * the lock; callers retry against a fresh read.
  */
 export async function publish<T>(
   path: string, expectedRevision: number, payload: T, normalize: Normalize<T>,
-  options: { maxBytes: number; durability?: Durability; payloadJson?: string },
+  options: { maxBytes: number; durability?: Durability; payloadJson?: string; lockPath?: string },
 ): Promise<Record<T>> {
-  const durability = options.durability ?? 'full';
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const lockPath = `${path}.lock`;
-  const lock = await acquireLock(lockPath);
-  try {
-    const current = await readRecord(path, normalize, options.maxBytes);
-    const revision = current?.revision ?? 0;
-    if (revision !== expectedRevision) {
-      throw Object.assign(new Error(`Record changed before the write; current revision is ${revision}.`), { code: 'STALE_REVISION' });
-    }
-    const next = revision + 1;
-    // Supplied by callers that already serialized this exact object; it must
-    // equal JSON.stringify(payload). The record stays self-consistent either
-    // way, because the hash is taken over the string that gets embedded.
-    const payloadJson = options.payloadJson ?? JSON.stringify(payload);
-    const text = `{"schemaVersion":1,"revision":${next},"contentHash":"${sha256(payloadJson)}","payload":${payloadJson}}`;
-    if (Buffer.byteLength(text) > options.maxBytes) throw new Error('Record size limit exceeded.');
-    const historyPath = join(dirname(path), 'revisions', `${next}.json`);
-    const previous = await readRecord(historyPath, (raw: string) => envelope<T>(raw), options.maxBytes);
-    if (previous && (previous.revision !== next || (previous.payloadJson ?? JSON.stringify(previous.payload)) !== payloadJson)) {
-      throw new Error('An interrupted publication owns this revision; explicit recovery is required.');
-    }
-    if (!previous) await writeAtomic(historyPath, text, durability);
-    // Point `path` at the inode already holding the history copy: one write
-    // per publication, and the current record shares bytes with its revision.
-    const tmp = `${path}.${randomUUID()}.tmp`;
-    await link(historyPath, tmp);
-    try {
-      await rename(tmp, path);
-      if (durability === 'full') await syncDirectory(path);
-    } finally { await unlink(tmp).catch(() => {}); }
-    cache.delete(path);
-    counters.publishes++;
-    await pruneRevisions(dirname(path), next).catch(() => {});
-    return { revision: next, payload, payloadJson };
-  } finally {
-    await lock.close();
-    await unlink(lockPath).catch(() => {});
-  }
+  return withFileLock(options.lockPath ?? `${path}.lock`, () =>
+    publishLocked(path, expectedRevision, payload, normalize, options));
 }
