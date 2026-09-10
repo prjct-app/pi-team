@@ -1,3 +1,9 @@
+## [0.5.2](https://github.com/prjct-app/pi-team/compare/v0.5.1...v0.5.2) (2026-09-10)
+
+### Performance Improvements
+
+* stop injecting duplicate and unbounded state into the model context ([#26](https://github.com/prjct-app/pi-team/issues/26)) ([be7c2ca](https://github.com/prjct-app/pi-team/commit/be7c2cab7b3e6bc4c28a32aa305d9d491cde2b9a))
+
 ## [0.5.1](https://github.com/prjct-app/pi-team/compare/v0.5.0...v0.5.1) (2026-09-10)
 
 ## [0.5.0](https://github.com/prjct-app/pi-team/compare/v0.4.4...v0.5.0) (2026-09-10)
