@@ -13,6 +13,14 @@ Coordinate independent PI Agent sessions with local team messaging, queued tasks
 - Automatic task-boundary compaction before the next team turn, keeping independent sessions focused and reusable.
 - Live request-flow widget showing requester → assignee relationships, folded transcript previews, and one `/team` command surface.
 
+## Watch the film
+
+[Preview the 33-second promotional film](https://github.com/prjct-app/pi-team/tree/main/media/introduction)
+
+[Watch or download the video](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/introduction/pi-team-introduction.mp4) · [English transcript](https://github.com/prjct-app/pi-team/blob/main/media/introduction/transcript.md) · [Subtitles](https://github.com/prjct-app/pi-team/blob/main/media/introduction/pi-team.en.srt)
+
+A short promotional film with English synthetic narration and optional captions. Independent sessions, connected progress.
+
 ## Install
 
 Requires Pi installed separately and Node.js **22.19 or later**. Compatibility is tested with **Pi 0.85.1**; newer versions are not yet verified. This is an independent community package.
