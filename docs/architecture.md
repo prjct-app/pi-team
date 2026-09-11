@@ -135,6 +135,13 @@ no exactly-once guarantee** for filesystem changes or model actions: a crash aft
 claiming but before starting also leaves an interrupted task. If storage cannot
 record a result, reception pauses and reports an error.
 
+Reception pauses for one of three reasons, and only one of them is transient.
+The auto-turn cap (`PI_TEAM_AUTO_TURNS`, default 5, `0` to remove) pauses to
+demand a person; typing in the session, `/team resume`, or restarting it all
+supply that and lift the pause, so the cap is never recorded for restoration. An
+explicit `/team pause` and a recovery pause after a takeover, a failed turn, or a
+crash during a task are recorded and do survive a reload.
+
 Membership and pause state are recorded in Pi session entries. Resuming the same
 session rejoins; `/new` and `/fork` do not inherit membership. Before claiming
 work the extension records that restoration must pause, without pausing the live

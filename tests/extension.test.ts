@@ -681,3 +681,106 @@ test('the file-list cap matches a full re-serialization at every boundary', asyn
   const base = { outcome: 'completed', body: 'y', files: [] as string[], tests: [] as string[] };
   assert.equal(fitFiles(base as never, unicode).files.length, reference(base, unicode).files.length);
 });
+
+test('the auto-turn limit is configurable and names its escape hatch when it stops reception', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-autoturns-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend', [], { autoTurns: 2 });
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  pm.busy(true); be.busy(true);
+  for (let i = 0; i < 3; i++) await pm.command(`send backend Task ${i}`);
+  be.busy(false);
+  for (let i = 0; i < 2; i++) {
+    await until(() => be.received.length === i + 1);
+    await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Finished' }] } });
+    be.busy(false); await be.emit('agent_settled');
+  }
+  await until(() => be.notices.some(n => /auto-turn limit reached \(2 unattended turns\)/.test(n)));
+  assert.equal(be.received.length, 2);
+  assert.ok(be.notices.some(n => /PI_TEAM_AUTO_TURNS/.test(n)));
+});
+
+test('an interactive prompt lifts the auto-turn pause without an explicit resume', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-autoturns-attended-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend', [], { autoTurns: 1 });
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  pm.busy(true); be.busy(true);
+  await pm.command('send backend First task'); await pm.command('send backend Second task');
+  be.busy(false);
+  await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Finished' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  await until(() => be.notices.some(n => /auto-turn limit/.test(n)));
+  assert.equal(be.received.length, 1);
+  // A person typing is the attention the cap was holding out for.
+  await be.emit('input', { source: 'interactive', text: 'what are you working on?' });
+  await until(() => be.received.length === 2);
+  assert.match(be.received[1].content, /Second task/);
+});
+
+test('typing does not lift a pause the user asked for', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-explicit-pause-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend');
+  t.after(async () => { await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await rm(root, { recursive: true, force: true }); });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  await be.command('pause');
+  pm.busy(true);
+  await pm.command('send backend Task while paused');
+  await be.emit('input', { source: 'interactive', text: 'just looking' });
+  // The widget proves a tick ran with the message visible and reception still paused.
+  await until(() => (be.widgets.get('team') ?? []).some(line => /paused/.test(line) && /1 pending/.test(line)));
+  assert.equal(be.received.length, 0);
+});
+
+test('an auto-turn pause is not restored after a reload', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-autoturns-reload-'));
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend', [], { autoTurns: 1 });
+  let resumed: ReturnType<typeof harness> | undefined;
+  t.after(async () => {
+    await pm.emit('session_shutdown'); await be.emit('session_shutdown'); await resumed?.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  pm.busy(true); be.busy(true);
+  await pm.command('send backend First task'); await pm.command('send backend Queued task');
+  be.busy(false);
+  await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Finished' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  await until(() => be.notices.some(n => /auto-turn limit/.test(n)));
+  // Reception is paused, but the cap never records that for restoration.
+  assert.equal(be.entries.filter(e => e.customType === 'team-membership').at(-1).data.paused, false);
+  await be.emit('session_shutdown', { reason: 'reload' });
+  resumed = harness(root, 'backend', be.entries, { autoTurns: 1 });
+  await resumed.emit('session_start', { reason: 'reload' });
+  await until(() => resumed!.received.length === 1);
+  assert.match(resumed.received[0].content, /Queued task/);
+});
+
+test('PI_TEAM_AUTO_TURNS sets the cap when no option is passed', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-autoturns-env-'));
+  const previous = process.env.PI_TEAM_AUTO_TURNS;
+  process.env.PI_TEAM_AUTO_TURNS = '1';
+  const pm = harness(root, 'pm'); const be = harness(root, 'backend');
+  t.after(async () => {
+    if (previous === undefined) delete process.env.PI_TEAM_AUTO_TURNS;
+    else process.env.PI_TEAM_AUTO_TURNS = previous;
+    await pm.emit('session_shutdown'); await be.emit('session_shutdown');
+    await rm(root, { recursive: true, force: true });
+  });
+  await pm.emit('session_start'); await be.emit('session_start');
+  await pm.command('create shop'); await pm.command('join shop pm'); await be.command('join shop backend');
+  pm.busy(true); be.busy(true);
+  await pm.command('send backend First task'); await pm.command('send backend Second task');
+  be.busy(false);
+  await until(() => be.received.length === 1);
+  await be.emit('message_end', { message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Finished' }] } });
+  be.busy(false); await be.emit('agent_settled');
+  await until(() => be.notices.some(n => /auto-turn limit reached \(1 unattended turn\)/.test(n)));
+  assert.equal(be.received.length, 1);
+});

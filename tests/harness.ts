@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { installTeam } from '../src/index.ts';
 
 type Handler = (event: any, ctx: any) => unknown;
-export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; confirm?: boolean } = {}) {
+export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; autoTurns?: number; confirm?: boolean } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
@@ -48,7 +48,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
       if (options.triggerTurn) idle = false;
     },
   } as unknown as ExtensionAPI;
-  installTeam(api, { root, pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000 });
+  installTeam(api, { root, pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000, autoTurns: options.autoTurns });
   return {
     received, notices, confirmations, entries, tools, commands, renderers, widgets,
     async emit(name: string, event: unknown = {}) {

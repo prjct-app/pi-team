@@ -132,6 +132,8 @@ type Session = Readonly<{
   timer?: ReturnType<typeof setInterval>;
   watcher?: FSWatcher;
   paused: boolean;
+  /** Why reception is paused. Only 'budget' is transient. */
+  pauseReason?: 'user' | 'budget' | 'recovery';
   leaving: boolean;
   closed: boolean;
   prompts: number;
@@ -162,14 +164,27 @@ const INITIAL: Session = {
 
 /** Cleared on join, restore, and leave so a new membership starts unbiased. */
 const MEMBERSHIP_RESET = {
-  paused: false, leaving: false, closed: false, aliases: [],
+  paused: false, pauseReason: undefined, leaving: false, closed: false, aliases: [],
   budget: 0, lastReview: 0, quietReviews: 0, lastRevision: -1,
 } as const;
 
-export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?: number; reviewMs?: number; agingMs?: number } = {}): void {
+/**
+ * Unattended automatic turns allowed before reception pauses for a person.
+ * Pi 0.85.1 has no per-extension settings, so the environment is the only way
+ * to reach a session nobody starts by hand. `0` removes the cap.
+ */
+function autoTurnsFromEnv(): number | undefined {
+  const raw = process.env.PI_TEAM_AUTO_TURNS?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?: number; reviewMs?: number; agingMs?: number; autoTurns?: number } = {}): void {
   const box = new Mailbox(options.root ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'teams'));
   const reviewMs = options.reviewMs ?? 60_000;
   const agingMs = options.agingMs ?? 300_000;
+  const autoTurns = options.autoTurns ?? autoTurnsFromEnv() ?? 5;
   const slot = { current: INITIAL };
   const get = (): Session => slot.current;
   const set = (update: (session: Session) => Partial<Session>): Session =>
@@ -185,7 +200,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     if (!member || leaving) throw new Error('Join a team first: /team join <team> <alias>');
     return member;
   }
-  function persist(pauseOnRestore = get().paused || !!get().active) {
+  function persist(pauseOnRestore = (get().paused && get().pauseReason !== 'budget') || !!get().active) {
     const { member, leaving } = get();
     pi.appendEntry('team-membership', member && !leaving ? {
       team: member.team, alias: member.alias, session: member.session, paused: pauseOnRestore,
@@ -290,11 +305,11 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       for (const message of await box.notes(member)) pi.appendEntry('team-event', message);
     }
     if (!ready()) return;
-    if (get().budget >= 5) {
+    if (autoTurns > 0 && get().budget >= autoTurns) {
       if (pending) {
-        set(() => ({ paused: true }));
+        set(() => ({ paused: true, pauseReason: 'budget' }));
         persist();
-        ctx.ui.notify('Team auto-turn limit reached. /team resume to continue.', 'info');
+        ctx.ui.notify(`Team auto-turn limit reached (${autoTurns} unattended turn${autoTurns === 1 ? '' : 's'}). /team resume to continue, or set PI_TEAM_AUTO_TURNS to raise the limit (0 removes it).`, 'info');
       }
       return;
     }
@@ -329,7 +344,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       }, { triggerTurn: true, deliverAs: 'followUp' });
     } catch (error) {
       await box.complete(member, message.id, { outcome: 'interrupted', body: 'Could not start processing. Review before retrying.', files: [], tests: [] });
-      set(() => ({ active: undefined, paused: true }));
+      set(() => ({ active: undefined, paused: true, pauseReason: 'recovery' }));
       persist();
       throw error;
     }
@@ -573,17 +588,17 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
               break;
             case 'pause':
               required();
-              set(() => ({ paused: true }));
+              set(() => ({ paused: true, pauseReason: 'user' }));
               persist();
               ui.notify('Team reception paused. Current work is not cancelled.', 'info'); break;
             case 'resume':
               required();
               if (get().active && context.isIdle()) throw new Error('A result was not persisted. Leave and rejoin to recover; review before retrying work.');
-              set(() => ({ paused: false, budget: 0, lastError: '', quietReviews: 0 }));
+              set(() => ({ paused: false, pauseReason: undefined, budget: 0, lastError: '', quietReviews: 0 }));
               persist(); enqueueTick(); break;
             case 'leave':
               required();
-              set(() => ({ paused: true }));
+              set(() => ({ paused: true, pauseReason: 'user' }));
               if (get().active && !context.isIdle()) {
                 set(() => ({ leaving: true }));
                 pi.appendEntry('team-membership', null);
@@ -610,7 +625,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     if (data?.team && data.alias && data.session === context.sessionManager.getSessionId() && event.reason !== 'fork' && event.reason !== 'new') {
       try {
         const member = await box.join(data.team, data.alias, data.session, context.cwd);
-        set(() => ({ member, paused: data.paused ?? false }));
+        set(() => ({ member, paused: data.paused ?? false, pauseReason: data.paused ? 'recovery' : undefined }));
         persist(); start();
       } catch (error) { notice(error); }
     }
@@ -627,8 +642,15 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   pi.on('input', event => {
     if (event.source !== 'interactive') return;
     set(() => ({ budget: 0 }));
+    // The cap pauses to demand a person; one just typed. An explicit /team
+    // pause and a recovery pause both stand.
+    if (get().paused && get().pauseReason === 'budget') {
+      set(() => ({ paused: false, pauseReason: undefined }));
+      persist();
+      enqueueTick();
+    }
     if (get().active) {
-      set(() => ({ userTakeover: true, paused: true }));
+      set(() => ({ userTakeover: true, paused: true, pauseReason: 'user' }));
       persist();
     }
   });
@@ -668,11 +690,11 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
         body: fitted.truncated ? `${body}\nFile list truncated; review the recipient session.` : body,
       };
       await box.complete(member, finished.id, report);
-      set(() => ({ active: undefined, ...(outcome !== 'completed' ? { paused: true } : {}) }));
+      set(() => ({ active: undefined, ...(outcome !== 'completed' ? { paused: true, pauseReason: 'recovery' as const } : {}) }));
       if (get().leaving) await detach();
       else persist();
     }).catch(error => {
-      set(() => ({ paused: true }));
+      set(() => ({ paused: true, pauseReason: 'recovery' }));
       notice(error);
     });
     enqueueTick();
@@ -683,7 +705,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     await queue(async () => {
       const { member, active, leaving } = get();
       if (member) {
-        if (active && !leaving) { set(() => ({ paused: true })); persist(); }
+        if (active && !leaving) { set(() => ({ paused: true, pauseReason: 'recovery' })); persist(); }
         await box.leave(member).catch(notice);
       }
       set(() => ({ member: undefined, active: undefined }));

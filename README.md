@@ -159,7 +159,7 @@ asks your agent to chase the teammate or tell you what is blocked. See
 
 | Limit | Value |
 | --- | --- |
-| Automatic peer turns before reception pauses | 5, then `/team resume` |
+| Automatic peer turns before reception pauses | 5 by default, then `/team resume`; set `PI_TEAM_AUTO_TURNS` to change it (`0` removes the cap) |
 | Messages in one automatically linked conversation | 8 non-result |
 | Unsettled deliveries per member | 50 slots, one reserved per outstanding request |
 | Records per team | 500, including reserved result capacity |
@@ -171,15 +171,32 @@ asks your agent to chase the teammate or tell you what is blocked. See
 | Duplicate suppression | identical message within 1 min is refused |
 
 No daily token or monetary budget is enforced. History is never silently deleted:
-create a fresh team when one is full. Review cadence and the turn budget are fixed
-defaults, not user-configurable yet.
+create a fresh team when one is full. Review cadence is a fixed default.
+
+The turn budget counts turns that ran with nobody at the keyboard of that session,
+which is what it exists to bound. It is reset by typing in the session, by
+`/team resume`, and by restarting the session. A pause the cap imposed is not
+restored on reload; a pause from `/team pause`, a user takeover, or a crash during
+a task is.
+
+### `PI_TEAM_AUTO_TURNS`
+
+Set it in the environment of each Pi session to change how many unattended
+automatic turns run before reception pauses. `0` removes the cap, so an
+unsupervised session keeps accepting peer work indefinitely — the spend and the
+blast radius are then yours to bound. Invalid values fall back to `5`.
+
+```sh
+PI_TEAM_AUTO_TURNS=50 pi
+```
 
 ## Troubleshooting
 
 | Symptom | Cause and action |
 | --- | --- |
 | A request stays queued | Run `/team status`. The recipient may be busy, paused, offline, missing a model, or typing. After five minutes, review turns chase it or surface the blockage. |
-| `Team auto-turn limit reached` | Five automatic turns ran without user input. Review the transcript, then `/team resume`. |
+| Every teammate heartbeats but nothing is consumed | Reception is paused on each of them, most often by the auto-turn cap; `/team members` shows `paused`. A paused member never claims work, so check-ins pile up. Resume them, or raise `PI_TEAM_AUTO_TURNS` for unattended teams. |
+| `Team auto-turn limit reached` | That many automatic turns ran without user input. Review the transcript, then `/team resume`, or type anything in the session — both lift it. Raise `PI_TEAM_AUTO_TURNS` if the sessions are meant to run unattended. |
 | `Message not claimed by this session` | The durable claim changed before settlement. Review for partial effects, then `/reload` or leave and rejoin before `/team resume`. After updating pi-team, reload every live teammate so all sessions use the same runtime. |
 | `Membership expired or replaced` | Another live session took your alias. Rejoin, choosing a new alias if the old one is in use. |
 | `Recipient inbox full` / `Sender inbox full` | Fifty unsettled deliveries per member, one slot reserved per outstanding request. Let the teammate drain; notes need no reservation. |
