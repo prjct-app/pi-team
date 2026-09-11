@@ -1,3 +1,9 @@
+## [0.6.1](https://github.com/prjct-app/pi-team/compare/v0.6.0...v0.6.1) (2026-09-11)
+
+### Bug Fixes
+
+* preserve mailbox locks across rolling upgrades ([3509903](https://github.com/prjct-app/pi-team/commit/3509903026205a0a3d00fcd52eecb3b970ba4d7b))
+
 ## [0.6.0](https://github.com/prjct-app/pi-team/compare/v0.5.7...v0.6.0) (2026-09-10)
 
 ### Features
