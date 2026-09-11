@@ -180,6 +180,7 @@ defaults, not user-configurable yet.
 | --- | --- |
 | A request stays queued | Run `/team status`. The recipient may be busy, paused, offline, missing a model, or typing. After five minutes, review turns chase it or surface the blockage. |
 | `Team auto-turn limit reached` | Five automatic turns ran without user input. Review the transcript, then `/team resume`. |
+| `Message not claimed by this session` | The durable claim changed before settlement. Review for partial effects, then `/reload` or leave and rejoin before `/team resume`. After updating pi-team, reload every live teammate so all sessions use the same runtime. |
 | `Membership expired or replaced` | Another live session took your alias. Rejoin, choosing a new alias if the old one is in use. |
 | `Recipient inbox full` / `Sender inbox full` | Fifty unsettled deliveries per member, one slot reserved per outstanding request. Let the teammate drain; notes need no reservation. |
 | `Team history full (500 records)` | At capacity; history is never deleted. Create a fresh team and rejoin. |

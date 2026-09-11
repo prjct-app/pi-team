@@ -25,9 +25,14 @@ next one. The history doubles as recovery evidence for an interrupted write.
 Writers compare-and-swap on the revision under a short-lived per-team lock in
 `~/.pi/agent/teams/.locks/`. Keeping the lock outside the team directory lets
 rename and deletion fence stale publishers without allowing them to recreate a
-moved directory. A conflict fails fast and the caller retries against a fresh
-read, so many agents write concurrently instead of queueing behind a team-wide
-lock. A lock abandoned by a crashed writer is reclaimed after ten seconds.
+moved directory. Normal publications also acquire the pre-0.6 compatibility
+lock beside `state.json`, after the stable lock. This overlap is required while
+sessions from both sides of the lock migration remain alive during a rolling
+reload; without it, two versions could publish the same next revision and lose
+a claim. The compatibility lock is opened without creating its parent, so a
+stale writer still cannot resurrect a deleted team. A conflict fails fast and
+the caller retries against a fresh read. A lock abandoned by a crashed writer
+is reclaimed after ten seconds.
 
 Because every publication renames a **new inode** into place, readers can safely
 cache a parsed record keyed on `(inode, size, mtime)`: a write by any process

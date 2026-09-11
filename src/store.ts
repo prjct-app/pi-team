@@ -151,8 +151,8 @@ async function acquireLock(lockPath: string) {
 }
 
 /** Run one storage operation while holding a caller-chosen private lock. */
-export async function withFileLock<T>(lockPath: string, action: () => Promise<T>): Promise<T> {
-  await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
+export async function withFileLock<T>(lockPath: string, action: () => Promise<T>, createParent = true): Promise<T> {
+  if (createParent) await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   const lock = await acquireLock(lockPath);
   try { return await action(); }
   finally {
@@ -225,6 +225,23 @@ export async function publish<T>(
   path: string, expectedRevision: number, payload: T, normalize: Normalize<T>,
   options: { maxBytes: number; durability?: Durability; payloadJson?: string; lockPath?: string },
 ): Promise<Record<T>> {
-  return withFileLock(options.lockPath ?? `${path}.lock`, () =>
-    publishLocked(path, expectedRevision, payload, normalize, options));
+  const legacyLock = `${path}.lock`;
+  const primaryLock = options.lockPath ?? legacyLock;
+  // Releases before 0.6.0 lock the record path, while lifecycle-safe writers
+  // use the stable external team lock. During a rolling reload both versions
+  // can be alive, so new normal publications must intersect both lock sets or
+  // two writers can pass the revision check and publish the same next revision.
+  return withFileLock(primaryLock, async () => {
+    if (primaryLock === legacyLock) return publishLocked(path, expectedRevision, payload, normalize, options);
+    // Acquiring an in-directory compatibility lock must not recreate a team
+    // that a lifecycle operation deleted while this writer was waiting for the
+    // stable lock. Revision-zero creation is the only intentional exception.
+    const current = await readRecord(path, normalize, options.maxBytes);
+    if (!current && expectedRevision !== 0) {
+      throw Object.assign(new Error('Record changed before the write; current revision is 0.'), { code: 'STALE_REVISION' });
+    }
+    if (!current) await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    return withFileLock(legacyLock,
+      () => publishLocked(path, expectedRevision, payload, normalize, options), false);
+  });
 }
