@@ -69,6 +69,31 @@ test('a lock abandoned by a crashed writer is broken after going stale', async (
   assert.equal((await stat(`${path}.lock`).catch(() => undefined)), undefined, 'The lock is released');
 });
 
+test('an external team lock also respects the legacy record lock during rolling upgrades', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-store-compat-lock-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'team', 'state.json');
+  const stableLock = join(root, '.locks', 'team.lock');
+  await publish(path, 0, { count: 1 }, envelope, { maxBytes: MAX, lockPath: stableLock });
+
+  await writeFile(`${path}.lock`, '', { flag: 'wx', mode: 0o600 });
+  await assert.rejects(
+    publish(path, 1, { count: 2 }, envelope, { maxBytes: MAX, lockPath: stableLock }),
+    /Another writer/,
+    'A new writer must not publish while a pre-upgrade writer owns state.json.lock',
+  );
+  assert.equal((await readRecord(path, envelope<{ count: number }>, MAX))?.payload.count, 1);
+  assert.equal(await stat(stableLock).catch(() => undefined), undefined, 'The stable lock is released after compatibility contention');
+
+  await rm(join(root, 'team'), { recursive: true, force: true });
+  await assert.rejects(
+    publish(path, 1, { count: 2 }, envelope, { maxBytes: MAX, lockPath: stableLock }),
+    /current revision is 0/,
+  );
+  assert.equal(await stat(join(root, 'team')).catch(() => undefined), undefined,
+    'A stale compatibility writer must not recreate a deleted team directory');
+});
+
 test('concurrent writers retry through conflicts; exactly one wins each revision', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-store-'));
   t.after(() => rm(root, { recursive: true, force: true }));
