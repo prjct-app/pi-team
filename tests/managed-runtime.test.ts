@@ -70,7 +70,7 @@ test('managed runtime reuses persistent peer sessions and emits only structured 
   const secondItem = { ...data.item, id: 'api-tests', title: 'Test API', attempts: 1 };
   const second = await runtime.execute({ ...data.plan, workItems: [data.item, secondItem] }, secondItem, { ...data.agent, workItemId: secondItem.id });
   assert.equal(created.length, 1, 'The same independent Pi session persists across tasks');
-  assert.deepEqual(created[0].tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls']);
+  assert.deepEqual(created[0].tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'team_peer_send']);
   assert.deepEqual(session.prompts.map(prompt => (prompt.options as { source: string }).source), ['extension', 'extension']);
   assert.match(session.prompts[0].text, /dedicated worktree/);
   assert.match(session.prompts[0].text, /Do not push, create or merge a pull request/);

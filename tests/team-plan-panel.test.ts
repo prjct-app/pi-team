@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { visibleWidth } from '@earendil-works/pi-tui';
-import { TeamPlanPanel, teamWidget } from '../src/team-plan-panel.ts';
+import { TeamPlanPanel, teamWidget, teamWidgetLines } from '../src/team-plan-panel.ts';
 import type { TeamViewSnapshot } from '../src/managed-schema.ts';
 
 const theme = {
@@ -57,6 +57,15 @@ test('team plan panel renders responsive bounded lines and semantic plan state',
     assert.match(text, /api → ui/);
     assert.doesNotMatch(text, /\/worktrees\/backend/, 'Plan view stays compact');
   } finally { component.dispose(); }
+});
+
+test('native below-editor widget lists the active plan without exceeding terminal width', () => {
+  const lines = teamWidgetLines(snapshot(), theme, 64);
+  assert.ok(lines.every(line => visibleWidth(line) <= 64));
+  assert.match(lines.join('\n'), /release-team 1\/3.*33%.*active/);
+  assert.match(lines.join('\n'), /Build API.*backend/);
+  assert.match(lines.join('\n'), /blocker.*Waiting for API/);
+  assert.match(lines.join('\n'), /approval.*publish-pr/);
 });
 
 test('keyboard and mouse provide equivalent agent activity navigation', () => {

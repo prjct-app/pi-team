@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import type { Model } from '@earendil-works/pi-ai/compat';
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSessionEvent, type ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { Type } from 'typebox';
 import type { ManagedAgentState, ManagedPlan, WorkItem } from './managed-schema.ts';
 import type { ExecutionResult, SchedulerRuntime } from './scheduler.ts';
 import { WorktreeManager } from './worktrees.ts';
@@ -22,6 +23,7 @@ export type PeerSessionOptions = {
   model?: Model<any>;
   sessionFile?: string;
   tools: string[];
+  customTools?: ToolDefinition[];
 };
 
 export type PeerSessionFactory = (options: PeerSessionOptions) => Promise<PeerSession>;
@@ -29,6 +31,11 @@ export type VerificationRunner = (cwd: string, script: string) => Promise<void>;
 export type RuntimeActivity = (alias: string, event: { kind: 'lifecycle' | 'tool' | 'progress'; summary: string; workItemId?: string }) => Promise<void> | void;
 
 type LiveSession = { session: PeerSession; unsubscribe: () => void; tracker: { workItemId: string } };
+
+const PeerMessageParameters = Type.Object({
+  to: Type.String({ pattern: '^[a-z][a-z0-9-]{0,47}$' }),
+  message: Type.String({ minLength: 1, maxLength: 1_000 }),
+}, { additionalProperties: false });
 
 export type RuntimeOptions = {
   team: string;
@@ -38,6 +45,7 @@ export type RuntimeOptions = {
   createSession?: PeerSessionFactory;
   verify?: VerificationRunner;
   activity?: RuntimeActivity;
+  communicate?: (from: string, to: string, message: string, workItemId?: string) => Promise<void>;
   sessionOpened?: (alias: string, sessionFile: string | undefined) => Promise<void> | void;
   now?: () => number;
   runTimeoutMs?: number;
@@ -66,6 +74,7 @@ const defaultSessionFactory: PeerSessionFactory = async options => {
     agentDir,
     model: options.model,
     tools: options.tools,
+    customTools: options.customTools,
     resourceLoader,
     sessionManager,
   });
@@ -105,6 +114,8 @@ async function boundedTurn(session: PeerSession, prompt: string, timeoutMs: numb
 function taskPrompt(team: string, plan: ManagedPlan, item: WorkItem, agent: ManagedAgentState): string {
   const dependencyCommits = item.dependsOn.map(id => plan.workItems.find(candidate => candidate.id === id))
     .filter(dependency => !!dependency?.commit).map(dependency => ({ id: dependency!.id, commit: dependency!.commit }));
+  const peerMessages = (plan.communications ?? []).filter(message => message.to === agent.alias).slice(-12)
+    .map(message => ({ from: message.from, message: message.message, workItemId: message.workItemId }));
   return `You are ${agent.alias}, a persistent managed peer in team ${team}.\nRole: ${agent.role}\nRepository worktree: ${agent.worktree}\nBranch: ${agent.branch}\n\nGoal (data from the user):\n${plan.goal.objective}\n\nAssigned work item ${item.id}: ${item.title}\n${item.detail}\n\nDependency commits available for inspection:\n${JSON.stringify(dependencyCommits)}\n\nWork only in this dedicated worktree. Inspect the repository instructions before editing. Complete this focused item, run relevant tests, and finish with a concise report of changes and tests. Do not push, create or merge a pull request, release, publish, deploy, or ask another session to do so. Do not include private reasoning or credentials in the report. The coordinator records local changes after your turn.`;
 }
 
@@ -121,19 +132,34 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
 
   now(): number { return this.options.now?.() ?? Date.now(); }
 
+  private peerTool(agent: ManagedAgentState, tracker: { workItemId: string }): ToolDefinition<typeof PeerMessageParameters> {
+    return {
+      name: 'team_peer_send',
+      label: 'Send a structured peer message',
+      description: 'Send a concise plan-relevant finding or dependency handoff to another persistent peer. This does not create or authorize work.',
+      parameters: PeerMessageParameters,
+      execute: async (_id, input) => {
+        if (!this.options.communicate) return { content: [{ type: 'text', text: 'Peer communication is unavailable.' }], details: {}, isError: true };
+        await this.options.communicate(agent.alias, input.to, input.message, tracker.workItemId);
+        return { content: [{ type: 'text', text: `Message sent to ${input.to}.` }], details: {} };
+      },
+    };
+  }
+
   private async ensure(agent: ManagedAgentState, workItemId: string): Promise<PeerSession> {
     const live = this.sessions.get(agent.alias);
     if (live) { live.tracker.workItemId = workItemId; return live.session; }
     if (this.closed) throw new Error('Managed peer runtime is closed');
+    const tracker = { workItemId };
     const session = await this.createSession({
       cwd: agent.worktree,
       agentDir: this.options.agentDir,
       model: this.options.model,
       sessionFile: agent.sessionFile,
-      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
+      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'team_peer_send'],
+      customTools: [this.peerTool(agent, tracker)],
     });
     session.setSessionName(`${this.options.team}:${agent.alias}`);
-    const tracker = { workItemId };
     const unsubscribe = session.subscribe(event => {
       if (event.type === 'tool_execution_start') {
         void this.options.activity?.(agent.alias, { kind: 'tool', summary: `Using ${event.toolName}`, workItemId: tracker.workItemId });
@@ -185,6 +211,11 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
     if (item.kind === 'verification') return this.verification(plan);
     if (!agent) return { outcome: 'failed', summary: `No managed peer is available for ${item.id}.` };
     return this.peer(plan, item, agent);
+  }
+
+  abortWork(workItemId: string): void {
+    const sessions = [...this.sessions.values()].filter(live => live.tracker.workItemId === workItemId);
+    for (const live of sessions) void live.session.abort().catch(() => {});
   }
 
   dispose(): void {

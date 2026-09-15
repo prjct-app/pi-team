@@ -195,3 +195,26 @@ test('unrelated launches cannot clear an existing blocked goal', () => {
   assert.ok(scheduled.launches.length > 0);
   assert.equal(scheduled.plan.goal.status, 'blocked');
 });
+
+test('an active local integration serializes later batch integrations without blocking peer work', () => {
+  const value = plan('/repo');
+  const completed = new Set(['api', 'ui', 'review']);
+  value.workItems = [
+    ...value.workItems.map(item => completed.has(item.id) ? { ...item, status: 'completed' as const, completedAt: 2 } : item.id === 'integrate' ? { ...item, status: 'active' as const, attempts: 1 } : item),
+    { id: 'integration-batch', title: 'Integrate batch', detail: '', kind: 'integration', status: 'queued', dependsOn: ['review'], attempts: 0, maxAttempts: 1, createdAt: 2, updatedAt: 2, tests: [] },
+  ];
+  const scheduled = scheduleReady(value, 3);
+  assert.equal(scheduled.plan.workItems.find(item => item.id === 'integration-batch')?.status, 'ready');
+  assert.ok(!scheduled.launches.some(launch => launch.item.id === 'integration-batch'));
+});
+
+
+test('a paused plan launches nothing and resumes from the same durable DAG', () => {
+  const value = plan('/repo');
+  value.goal.status = 'paused';
+  const paused = scheduleReady(value, 2);
+  assert.deepEqual(paused.launches, []);
+  assert.deepEqual(paused.plan, value);
+  const resumed = scheduleReady({ ...paused.plan, goal: { ...paused.plan.goal, status: 'active' } }, 3);
+  assert.deepEqual(new Set(resumed.launches.map(launch => launch.item.id)), new Set(['api', 'ui']));
+});

@@ -41,6 +41,10 @@ test('managed plan validates references, acyclicity, assignments, and user-only 
   assert.throws(() => assertManagedPlan({ ...value, approvals: [{ ...value.approvals[0], status: 'granted' }] }), /only be decided by the user/);
   assert.throws(() => assertManagedPlan({ ...value, workItems: value.workItems.map(item => item.id === 'api' ? { ...item, attempts: 3 } : item) }), /cannot exceed/);
   assert.throws(() => assertManagedPlan({ ...value, approvals: [value.approvals[0], value.approvals[0]] }), /approval ids/);
+  const control = { id: 'control', action: 'cancel-work' as const, actor: 'user' as const, target: 'api', at: 1 };
+  assert.throws(() => assertManagedPlan({ ...value, controls: [control, control] }), /control ids/);
+  assert.throws(() => assertManagedPlan({ ...value, controls: [{ ...control, target: 'missing' }] }), /control targets/);
+  assert.throws(() => assertManagedPlan({ ...value, communications: [{ id: 'message', from: 'backend', to: 'missing', message: 'Review API', workItemId: 'api', at: 1 }] }), /communication/);
   assert.throws(() => assertManagedPlan({ ...value, unexpected: true }), /Invalid managed team plan/);
 });
 

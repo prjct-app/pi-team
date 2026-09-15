@@ -9,7 +9,7 @@ const timestamp = Type.Number({ minimum: 0 });
 export const GoalSchema = Type.Object({
   id,
   objective: Type.String({ minLength: 1, maxLength: 16_000 }),
-  status: enumOf('planning', 'active', 'blocked', 'verifying', 'ready', 'completed', 'failed'),
+  status: enumOf('planning', 'active', 'paused', 'blocked', 'verifying', 'ready', 'completed', 'failed'),
   repoRoot: path,
   baseBranch: Type.String({ minLength: 1, maxLength: 255 }),
   baseCommit: Type.String({ pattern: '^[a-f0-9]{40,64}$' }),
@@ -71,6 +71,32 @@ export const AgentStateSchema = Type.Object({
   activitySeq: Type.Integer({ minimum: 0 }),
 }, { additionalProperties: false });
 
+export const PeerCommunicationSchema = Type.Object({
+  id,
+  from: name,
+  to: name,
+  message: Type.String({ minLength: 1, maxLength: 1_000 }),
+  workItemId: Type.Optional(id),
+  at: timestamp,
+}, { additionalProperties: false });
+
+export const ControlEventSchema = Type.Object({
+  id,
+  action: enumOf('pause', 'resume', 'retry-work', 'reassign-work', 'cancel-work'),
+  actor: Type.Literal('user'),
+  target: Type.Optional(id),
+  at: timestamp,
+}, { additionalProperties: false });
+
+export const WorkRequestSchema = Type.Object({
+  id,
+  objective: Type.String({ minLength: 1, maxLength: 8_000 }),
+  status: enumOf('queued', 'dispatched'),
+  requestedBy: id,
+  createdAt: timestamp,
+  dispatchedAt: Type.Optional(timestamp),
+}, { additionalProperties: false });
+
 export const ManagedPlanSchema = Type.Object({
   version: Type.Literal(1),
   team: name,
@@ -80,20 +106,23 @@ export const ManagedPlanSchema = Type.Object({
   blockers: Type.Array(BlockerSchema, { maxItems: 200 }),
   approvals: Type.Array(ApprovalSchema, { maxItems: 20 }),
   agents: Type.Array(AgentStateSchema, { maxItems: 8 }),
+  requests: Type.Optional(Type.Array(WorkRequestSchema, { maxItems: 100 })),
+  controls: Type.Optional(Type.Array(ControlEventSchema, { maxItems: 200 })),
+  communications: Type.Optional(Type.Array(PeerCommunicationSchema, { maxItems: 500 })),
 }, { additionalProperties: false });
 
 export const ActivityEventSchema = Type.Object({
   seq: Type.Integer({ minimum: 1 }),
   at: timestamp,
   alias: name,
-  kind: enumOf('lifecycle', 'assignment', 'progress', 'tool', 'commit', 'test', 'blocker', 'recovery', 'result'),
+  kind: enumOf('lifecycle', 'assignment', 'progress', 'communication', 'tool', 'commit', 'test', 'blocker', 'recovery', 'result'),
   summary: Type.String({ minLength: 1, maxLength: 240 }),
   detail: Type.Optional(Type.String({ maxLength: 2_000 })),
   workItemId: Type.Optional(id),
 }, { additionalProperties: false });
 
 export type Goal = {
-  id: string; objective: string; status: 'planning' | 'active' | 'blocked' | 'verifying' | 'ready' | 'completed' | 'failed';
+  id: string; objective: string; status: 'planning' | 'active' | 'paused' | 'blocked' | 'verifying' | 'ready' | 'completed' | 'failed';
   repoRoot: string; baseBranch: string; baseCommit: string; createdAt: number; updatedAt: number;
 };
 export type WorkItem = {
@@ -115,13 +144,16 @@ export type ManagedAgentState = {
   alias: string; role: string; status: 'starting' | 'idle' | 'active' | 'blocked' | 'waiting' | 'recovering' | 'offline' | 'completed' | 'failed';
   worktree: string; branch: string; workItemId?: string; sessionFile?: string; lastSeen: number; restarts: number; activitySeq: number;
 };
+export type PeerCommunication = { id: string; from: string; to: string; message: string; workItemId?: string; at: number };
+export type ControlEvent = { id: string; action: 'pause' | 'resume' | 'retry-work' | 'reassign-work' | 'cancel-work'; actor: 'user'; target?: string; at: number };
+export type WorkRequest = { id: string; objective: string; status: 'queued' | 'dispatched'; requestedBy: string; createdAt: number; dispatchedAt?: number };
 export type ManagedPlan = {
   version: 1; team: string; leadSession: string; goal: Goal; workItems: WorkItem[];
-  blockers: Blocker[]; approvals: Approval[]; agents: ManagedAgentState[];
+  blockers: Blocker[]; approvals: Approval[]; agents: ManagedAgentState[]; requests?: WorkRequest[]; controls?: ControlEvent[]; communications?: PeerCommunication[];
 };
 export type ActivityEvent = {
   seq: number; at: number; alias: string;
-  kind: 'lifecycle' | 'assignment' | 'progress' | 'tool' | 'commit' | 'test' | 'blocker' | 'recovery' | 'result';
+  kind: 'lifecycle' | 'assignment' | 'progress' | 'communication' | 'tool' | 'commit' | 'test' | 'blocker' | 'recovery' | 'result';
   summary: string; detail?: string; workItemId?: string;
 };
 
@@ -142,5 +174,8 @@ export type TeamViewSnapshot = {
   approvals: Approval[];
   agents: ManagedAgentState[];
   criticalPath: string[];
+  requests?: WorkRequest[];
+  controls?: ControlEvent[];
+  communications?: PeerCommunication[];
   activity: Record<string, ActivityEvent[]>;
 };

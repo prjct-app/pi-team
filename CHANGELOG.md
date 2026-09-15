@@ -1,5 +1,13 @@
 ## Unreleased
 
+- Create every managed peer as a persistent, user-attachable tmux Pi terminal with durable mailbox communication.
+- Discover existing teams for the current repository before creation, queue cross-session objectives, and provide repository-wide plan monitoring.
+- Add `/team terminal` plus audited pause, resume, cancel, retry, reassign, and unblock controls.
+- Show the live managed Team Plan automatically below the editor with native Pi UI, and use a non-floating detailed view.
+- Allow an active factory plan to accept additional dependency-aware work batches while the lead keeps conversing; persistent peers process repeated tasks and idle peers run concurrently.
+- Keep the lead orchestration-only by blocking repository research and mutation tools outside explicitly approved publication gates.
+- Reduce top-level `/team` completion to the primary `plan` and `approve` operations while retaining manual-mailbox compatibility.
+
 ### Features
 
 - start autonomous managed teams from normal implementation prompts

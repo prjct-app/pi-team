@@ -1,4 +1,4 @@
-import { lstat, mkdir } from 'node:fs/promises';
+import { lstat, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Value } from 'typebox/value';
 import { identifier } from './mailbox.ts';
@@ -31,10 +31,16 @@ export function assertManagedPlan(plan: unknown): asserts plan is ManagedPlan {
   const aliases = typed.agents.map(agent => agent.alias);
   const blockerIds = typed.blockers.map(blocker => blocker.id);
   const approvalIds = typed.approvals.map(approval => approval.id);
+  const requestIds = (typed.requests ?? []).map(request => request.id);
+  const controlIds = (typed.controls ?? []).map(control => control.id);
+  const communicationIds = (typed.communications ?? []).map(message => message.id);
   if (!unique(ids)) throw new Error('Managed team work item ids must be unique');
   if (!unique(aliases)) throw new Error('Managed team agent aliases must be unique');
   if (!unique(blockerIds)) throw new Error('Managed team blocker ids must be unique');
   if (!unique(approvalIds)) throw new Error('Managed team approval ids must be unique');
+  if (!unique(requestIds)) throw new Error('Managed team request ids must be unique');
+  if (!unique(controlIds)) throw new Error('Managed team control ids must be unique');
+  if (!unique(communicationIds)) throw new Error('Managed team communication ids must be unique');
   if (typed.workItems.some(item => item.attempts > item.maxAttempts)) throw new Error('Managed team work item attempts cannot exceed maxAttempts');
   const known = new Set(ids);
   if (typed.workItems.some(item => item.dependsOn.includes(item.id) || item.dependsOn.some(dependency => !known.has(dependency)))) {
@@ -48,6 +54,12 @@ export function assertManagedPlan(plan: unknown): asserts plan is ManagedPlan {
   }
   if (typed.agents.some(agent => agent.workItemId && !known.has(agent.workItemId))) {
     throw new Error('Managed team agent state must reference a known work item');
+  }
+  if ((typed.communications ?? []).some(message => !aliases.includes(message.from) || !aliases.includes(message.to) || (message.workItemId && !known.has(message.workItemId)))) {
+    throw new Error('Managed peer communication must reference known agents and work items');
+  }
+  if ((typed.controls ?? []).some(control => control.target && !known.has(control.target))) {
+    throw new Error('Managed control targets must reference known work items');
   }
   if (typed.approvals.some(approval => approval.status === 'required'
     ? approval.actor !== undefined || approval.decidedAt !== undefined || approval.evidence !== undefined
@@ -121,6 +133,9 @@ export function buildTeamView(revision: number, plan: ManagedPlan, activity: Rec
     approvals: structuredClone(plan.approvals.filter(approval => approval.status === 'required')),
     agents: structuredClone(plan.agents),
     criticalPath: criticalPath(plan.workItems),
+    requests: structuredClone(plan.requests ?? []),
+    controls: structuredClone(plan.controls ?? []),
+    communications: structuredClone(plan.communications ?? []),
     activity: structuredClone(activity),
   };
 }
@@ -136,6 +151,19 @@ export class ManagedPlanStore {
     await privateDirectory(this.root);
     await privateDirectory(join(this.root, '.locks'));
     await privateDirectory(this.teamPath(team));
+  }
+
+  async list(): Promise<StoreRecord<ManagedPlan>[]> {
+    await privateDirectory(this.root);
+    const entries = await readdir(this.root, { withFileTypes: true });
+    const teams = entries.filter(entry => entry.isDirectory() && entry.name !== '.locks' && /^[a-z][a-z0-9-]{0,47}$/.test(entry.name));
+    const records = await Promise.all(teams.map(entry => this.read(entry.name)));
+    return records.filter((record): record is StoreRecord<ManagedPlan> => !!record)
+      .sort((left, right) => right.payload.goal.updatedAt - left.payload.goal.updatedAt || left.payload.team.localeCompare(right.payload.team));
+  }
+
+  async forRepository(repoRoot: string): Promise<StoreRecord<ManagedPlan>[]> {
+    return (await this.list()).filter(record => record.payload.goal.repoRoot === repoRoot);
   }
 
   async read(team: string): Promise<StoreRecord<ManagedPlan> | undefined> {
