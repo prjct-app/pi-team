@@ -39,6 +39,22 @@ test('corrupted records throw and are preserved for manual recovery', async (t) 
   await assert.rejects(readRecordCached(path, envelope, MAX), /hash mismatch/);
 });
 
+test('the read cache does not retain every unique path', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-store-cache-cap-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const paths = Array.from({ length: 80 }, (_, i) => join(root, `state-${i}.json`));
+  const records = [];
+  for (const [i, path] of paths.entries()) {
+    const payload = JSON.stringify({ i });
+    await writeAtomic(path, `{"schemaVersion":1,"revision":1,"contentHash":"${sha256(payload)}","payload":${payload}}`, 'none');
+    records.push(await readRecordCached(path, envelope, MAX));
+  }
+  assert.equal(await readRecordCached(paths.at(-1)!, envelope, MAX), records.at(-1),
+    'Recent records remain cached');
+  assert.notEqual(await readRecordCached(paths[0], envelope, MAX), records[0],
+    'Inserting more unique paths does not retain every record');
+});
+
 test('the stat-validated cache follows external writes to the same path', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-store-'));
   t.after(() => rm(root, { recursive: true, force: true }));

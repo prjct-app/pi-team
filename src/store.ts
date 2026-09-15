@@ -88,7 +88,8 @@ export async function readRecord<T>(path: string, normalize: Normalize<T>, maxBy
 
 // Stat-validated read cache for hot polling. Every publication renames a new
 // inode into place, so (ino, size, mtime) changes on each write, including
-// writes by other processes sharing the store.
+// writes by other processes sharing the store. Bounded to joined teams + plans.
+const CACHE_LIMIT = 64;
 const cache = new Map<string, { ino: number; size: number; mtimeMs: number; record: Record<unknown> | undefined }>();
 
 export async function readRecordCached<T>(path: string, normalize: Normalize<T>, maxBytes: number): Promise<Record<T> | undefined> {
@@ -99,6 +100,10 @@ export async function readRecordCached<T>(path: string, normalize: Normalize<T>,
     return hit.record as Record<T> | undefined;
   }
   const record = await readRecord(path, normalize, maxBytes);
+  if (!cache.has(path) && cache.size >= CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
   cache.set(path, { ino: info.ino, size: info.size, mtimeMs: info.mtimeMs, record: record as Record<unknown> | undefined });
   return record;
 }

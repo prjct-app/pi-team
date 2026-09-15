@@ -183,6 +183,23 @@ test('presence heartbeats keep members online without touching the shared record
   assert.equal((await box.history(be)).length, 1);
 });
 
+test('a presence symlink is not followed', async (t) => {
+  const { symlink, unlink, writeFile } = await import('node:fs/promises');
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-presence-symlink-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const box = new Mailbox(root);
+  await box.create('shop');
+  const pm = await box.join('shop', 'pm', 'pm', '/pm');
+  const be = await box.join('shop', 'backend', 'be', '/be');
+  const leaked = join(root, 'leaked.json');
+  await writeFile(leaked, JSON.stringify({ token: pm.token, status: 'busy', seen: Date.now() }), { mode: 0o600 });
+  const presence = join(root, 'shop', 'presence', 'pm.json');
+  await unlink(presence);
+  await symlink(leaked, presence);
+  assert.equal((await box.members(be)).find(m => m.alias === 'pm')?.status, 'idle',
+    'A presence symlink must not be followed');
+});
+
 test('pre-envelope mailboxes migrate transparently on the first write', async (t) => {
   const { mkdir, readFile, writeFile } = await import('node:fs/promises');
   const root = await mkdtemp(join(tmpdir(), 'pi-team-legacy-'));

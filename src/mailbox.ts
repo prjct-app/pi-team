@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, rename, rm, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readdir, rename, rm, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Value } from 'typebox/value';
 import { ResultSchema, StateSchema } from './schema.ts';
@@ -127,14 +128,18 @@ export class Mailbox {
     const entries = await Promise.all(names.map(async (name): Promise<[string, Presence] | undefined> => {
       if (!/^[a-z][a-z0-9-]{0,47}\.json$/.test(name)) return undefined;
       try {
-        const raw = await readFile(join(this.path(team), 'presence', name), 'utf8');
-        if (raw.length > 4096) return undefined;
-        const presence = JSON.parse(raw) as Presence;
-        if (typeof presence?.seen === 'number' && typeof presence?.token === 'string' &&
-            ['idle', 'busy', 'paused'].includes(presence?.status)) {
-          return [name.slice(0, -'.json'.length), presence];
-        }
-      } catch { /* A presence file may be replaced or removed mid-read. */ }
+        const handle = await open(join(this.path(team), 'presence', name), constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const info = await handle.stat();
+          if (!info.isFile() || info.size > 4096) return undefined;
+          const raw = await handle.readFile('utf8');
+          const presence = JSON.parse(raw) as Presence;
+          if (typeof presence?.seen === 'number' && typeof presence?.token === 'string' &&
+              ['idle', 'busy', 'paused'].includes(presence?.status)) {
+            return [name.slice(0, -'.json'.length), presence];
+          }
+        } finally { await handle.close(); }
+      } catch { /* Replaced, removed, symlink (ELOOP/EPERM), or malformed: skip. */ }
       return undefined;
     }));
     return new Map(entries.filter(entry => !!entry));
