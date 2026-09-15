@@ -292,8 +292,9 @@ export class ManagedCoordinator {
       approvals: plan.approvals.map(candidate => candidate.id === approval.id ? { ...candidate, status: 'granted', actor: 'user', decidedAt: now } : candidate),
     }));
     this.pi.appendEntry('managed-team-approval', { team, kind, approvalId: approval.id, decidedAt: now });
+    const target = kind === 'publish-pr' ? ` Integration branch: pi-team/${team}/integration. Worktree: ${join(this.root, team, 'worktrees', 'integration')}.` : '';
     this.pi.sendMessage({ customType: 'managed-team-approval', display: true, details: { team, kind, approvalId: approval.id },
-      content: `The user explicitly granted the ${kind} gate in the interactive confirmation. Perform only that gate's action, then call team_gate_report with factual evidence. This does not grant any later gate.`,
+      content: `The user explicitly granted the ${kind} gate in the interactive confirmation. Perform only that gate's action, then call team_gate_report with factual evidence. This does not grant any later gate.${target}`,
     }, { triggerTurn: true, deliverAs: 'followUp' });
     await this.refreshWidget();
     context.ui.notify(`${kind} authorization recorded.`, 'info');

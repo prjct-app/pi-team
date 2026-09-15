@@ -126,7 +126,7 @@ function finishPlan(plan: ManagedPlan, itemId: string, result: ExecutionResult, 
   const blocked = workItems.some(item => item.status === 'failed') || blockers.some(blocker => blocker.status !== 'resolved');
   const goalStatus = blocked ? 'blocked' as const : activeItems.length ? plan.goal.status : 'ready' as const;
   const approvals = !activeItems.length && !workItems.some(item => item.status === 'failed') && !plan.approvals.some(approval => approval.kind === 'publish-pr')
-    ? [...plan.approvals, { id: approvalId, kind: 'publish-pr' as const, status: 'required' as const, summary: 'Publish the integration branch and create a pull request', requestedAt: now }]
+    ? [...plan.approvals, { id: approvalId, kind: 'publish-pr' as const, status: 'required' as const, summary: `Publish integration branch pi-team/${plan.team}/integration and create a pull request`, requestedAt: now }]
     : plan.approvals;
   return { ...plan, workItems, agents, blockers, approvals, goal: { ...plan.goal, status: goalStatus, updatedAt: now } };
 }
