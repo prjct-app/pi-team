@@ -62,6 +62,15 @@ its original request and replies in-thread only if something is missing.
 States are `pending`, `processing`, `completed`, `interrupted`, and `seen`
 (notes already displayed).
 
+### Optional pi-subagents bridge
+
+pi-team publishes the active request root through a process-wide registry at
+`Symbol.for("prjct.agents")`. pi-subagents reads that provider when it admits a
+job, so work delegated during a team request carries the same root id. The
+registry is used instead of a package import because Pi loads extensions through
+separate jiti module graphs, where imported module state would not be shared.
+The provider is optional and the packages remain independently installable.
+
 ## Sweeping orphaned claims
 
 A session that dies holding a claim would otherwise leave its requester waiting
