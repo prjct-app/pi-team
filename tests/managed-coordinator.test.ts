@@ -153,6 +153,28 @@ test('the installed extension activates from ordinary input without create, join
 });
 
 
+test('an explicit /team objective starts managed work and forwards the objective as a user turn', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-command-objective-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await exec('git', ['init'], { cwd: root });
+  await exec('git', ['config', 'user.name', 'Test'], { cwd: root });
+  await exec('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+  await writeFile(join(root, 'README.md'), '# fixture');
+  await exec('git', ['add', '.'], { cwd: root });
+  await exec('git', ['commit', '-m', 'fixture'], { cwd: root });
+  const h = harness(join(root, '.mailbox'), 'lead-command', [], { cwd: root, managedRoot: join(root, '.managed') });
+  await h.emit('session_start', { reason: 'startup' });
+  const objective = 'revisa que mejoras podemos hacer considerando performance eficiencia y seguridad';
+  await h.command(objective);
+  assert.equal(h.userMessages.length, 1);
+  assert.deepEqual(h.userMessages[0], { content: objective, options: { expandPromptTemplates: false } });
+  assert.ok(h.entries.some(entry => entry.customType === 'managed-team'));
+  await h.command('audita también la accesibilidad del repositorio');
+  assert.equal(h.userMessages.length, 1, 'A second explicit objective must not diverge from the durable active goal');
+  assert.match(h.notices.at(-1) ?? '', /already active/);
+  await h.emit('session_shutdown');
+});
+
 test('dirty user checkout state is preserved and excluded rather than blocking autonomous work', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-coordinator-dirty-'));
   t.after(() => rm(root, { recursive: true, force: true }));

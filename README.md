@@ -33,7 +33,15 @@ Start Pi in a Git checkout and describe an implementation objective normally:
 Implement account settings with API validation, UI states, tests, and documentation.
 ```
 
-No `/team create`, `join`, `wake`, `up`, or `resume` is needed. For an action-oriented
+No `/team create`, `join`, `wake`, `up`, or `resume` is needed. You can also force
+managed mode explicitly when the request is exploratory or does not use an action verb:
+
+```text
+/team revisa qué mejoras podemos hacer considerando performance, eficiencia y seguridad
+```
+
+Unknown text after `/team` is treated as the objective; reserved command names such as
+`plan`, `status`, and `join` keep their documented behavior. For an action-oriented
 implementation prompt, pi-team creates a durable planning goal. The lead submits a
 bounded DAG through `team_plan`; up to eight persistent peer sessions then run in
 dedicated `pi-team/<team>/<alias>` branches and private worktrees. Integration and
