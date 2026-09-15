@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { identifier } from './mailbox.ts';
+import { childEnv } from './process-env.ts';
 import { withFileLock } from './store.ts';
 
 export type GitResult = { stdout: string; stderr: string };
@@ -18,7 +19,7 @@ function reason(error: unknown): string {
 
 export const runGit: GitRunner = (cwd, args) => new Promise((resolvePromise, reject) => {
   execFile('git', ['-C', cwd, ...args], {
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '1' },
+    env: childEnv({ extra: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '1' }, excludeFromPath: [cwd] }),
     maxBuffer: 4_000_000,
   }, (error, stdout, stderr) => {
     if (error) {

@@ -39,7 +39,8 @@ On lead reload, an active assignment is requeued without consuming another attem
 and the persistent peer session is reopened from its saved session file. Completed
 peer commits are cherry-picked by full SHA into a dedicated integration worktree.
 Standard package verification follows; failures create at most two corrective DAG
-cycles before becoming a visible blocker.
+cycles before becoming a visible blocker. Coordinator git and verification
+subprocesses inherit a sanitized environment, and verification uses `node --run`.
 
 A ready or blocked transition wakes the lead once with structured coordinator state so
 the lead can provide one consolidated result. Publication is not automatic. An

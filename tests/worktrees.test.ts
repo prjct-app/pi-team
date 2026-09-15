@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
+import { childEnv } from '../src/process-env.ts';
 import { discoverRepository, runGit, WorktreeManager } from '../src/worktrees.ts';
 
 const exec = promisify(execFile);
@@ -105,4 +106,46 @@ test('integration rejects non-SHA revision syntax before invoking cherry-pick', 
   const result = await manager.integrate(integration, ['HEAD~1']);
   assert.equal(result.ok, false);
   assert.match(result.ok ? '' : result.error, /full hexadecimal commit ids/);
+});
+
+function restoreEnv(names: readonly string[]): () => void {
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  return () => {
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  };
+}
+
+test('coordinator git subprocesses omit GIT_DIR, tokens, and NODE_OPTIONS from the child env', async (t) => {
+  const { root } = await repository(t);
+  const restore = restoreEnv(['GIT_DIR', 'GITHUB_TOKEN', 'NODE_OPTIONS', 'NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY']);
+  t.after(restore);
+  process.env.GIT_DIR = join(tmpdir(), 'pi-team-missing-git-dir');
+  process.env.GITHUB_TOKEN = 'ghs_probe';
+  process.env.NODE_OPTIONS = '--throw-deprecation';
+  process.env.NPM_TOKEN = 'npm_probe';
+  process.env.AWS_SECRET_ACCESS_KEY = 'aws_probe';
+  try {
+    const env = childEnv({ extra: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '1' }, excludeFromPath: [root] });
+    assert.equal(env.GIT_DIR, undefined);
+    assert.equal(env.GITHUB_TOKEN, undefined);
+    assert.equal(env.NODE_OPTIONS, undefined);
+    assert.equal(env.NPM_TOKEN, undefined);
+    assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined);
+    assert.equal(env.GIT_TERMINAL_PROMPT, '0');
+    assert.equal(env.GIT_OPTIONAL_LOCKS, '1');
+    const pathDirs = (env.PATH ?? '').split(':');
+    assert.equal(pathDirs.includes(''), false);
+    assert.equal(pathDirs.includes('.'), false);
+    assert.equal(pathDirs.includes(resolve(root)), false);
+    assert.equal(pathDirs.includes(resolve(process.cwd())), false);
+    const execDir = resolve(dirname(process.execPath));
+    if (execDir !== resolve(process.cwd()) && execDir !== resolve(root)) assert.equal(pathDirs.includes(execDir), true);
+    const top = await runGit(root, ['rev-parse', '--show-toplevel']);
+    assert.equal(resolve(top.stdout), resolve(await realpath(root)));
+  } finally {
+    restore();
+  }
 });
