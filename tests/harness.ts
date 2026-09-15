@@ -9,6 +9,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   const tools = new Map<string, any>();
   const entries: any[] = [...saved];
   const received: any[] = [];
+  const userMessages: { content: unknown; options: unknown }[] = [];
   const notices: string[] = [];
   const confirmations: { title: string; message: string }[] = [];
   const renderers = new Map<string, any>();
@@ -48,10 +49,11 @@ export function harness(root: string, session: string, saved: any[] = [], option
       received.push(message);
       if (options.triggerTurn) idle = false;
     },
+    sendUserMessage: (content: unknown, options: unknown) => { userMessages.push({ content, options }); idle = false; },
   } as unknown as ExtensionAPI;
   installTeam(api, { root, managedRoot: options.managedRoot ?? join(root, '.managed'), pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000, autoTurns: options.autoTurns });
   return {
-    received, notices, confirmations, entries, tools, commands, renderers, widgets,
+    received, userMessages, notices, confirmations, entries, tools, commands, renderers, widgets,
     async emit(name: string, event: unknown = {}) {
       const results: unknown[] = [];
       for (const handler of handlers.get(name) ?? []) results.push(await handler(event, context.current));

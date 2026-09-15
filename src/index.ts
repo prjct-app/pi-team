@@ -10,7 +10,7 @@ import { publishActiveRoot } from './agents.ts';
 import { ManagedCoordinator } from './managed.ts';
 
 const COMMANDS = ['plan', 'approve', 'create', 'delete', 'rename-team', 'join', 'list', 'members', 'remove', 'rename-member', 'status', 'wake', 'send', 'note', 'inbox', 'pause', 'resume', 'leave'];
-const HELP = '/team plan | /team approve <publish-pr|ship> | /team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
+const HELP = '/team <objective> | /team plan | /team approve <publish-pr|ship> | /team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
 const TEAM_CHECK_IN = `Team check-in: report what you are working on, what remains, blockers, and your next concrete step.
 If you are waiting on another teammate, use team_send to ask them directly for the missing input.
 Do not stay idle: complete any pending work you can finish within the current user's authorization and project rules.
@@ -455,7 +455,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
   });
 
   pi.registerCommand('team', {
-    description: 'Managed Team Plan, approvals, and manual mailbox lifecycle',
+    description: 'Start a managed objective, open Team Plan, approve gates, or manage a manual mailbox',
     getArgumentCompletions(prefix) {
       const parts = prefix.split(/\s+/);
       const values = parts.length === 1 ? COMMANDS
@@ -477,6 +477,14 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
         }
         try { await managed.approve(managedArgument as 'publish-pr' | 'ship', context); }
         catch (error) { notice(error); }
+        return;
+      }
+      if (managedCommand && !COMMANDS.includes(managedCommand)) {
+        if (get().member) { context.ui.notify('Leave the manual mailbox before starting a managed objective.', 'warning'); return; }
+        const objective = args.trim();
+        await managed.activate(objective, context, true);
+        if (!managed.isActive()) { context.ui.notify('Managed team could not start. Run this command inside a Git repository.', 'warning'); return; }
+        pi.sendUserMessage(objective, { expandPromptTemplates: false });
         return;
       }
       await queue(async () => {
