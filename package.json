@@ -1,7 +1,7 @@
 {
   "name": "@prjct.app/pi-team",
   "version": "0.5.7",
-  "description": "Coordinate independent PI Agent sessions with local team messaging, queued tasks, and shared results.",
+  "description": "Run autonomous persistent Pi teams in isolated Git worktrees, with live plans and human publication gates.",
   "type": "module",
   "keywords": [
     "pi-package",

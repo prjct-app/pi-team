@@ -1,3 +1,18 @@
+## Unreleased
+
+### Features
+
+- start autonomous managed teams from normal implementation prompts
+- isolate persistent peer sessions in dedicated branches and worktrees
+- add dependency scheduling, recovery, reassignment, local integration, verification, and corrective jobs
+- add the live clickable Team Plan TUI and bounded structured activity journals
+- add separate user-only publication and ship approval gates
+
+### Security
+
+- validate worktree repository ownership and full integration commit ids
+- sanitize persisted activity and keep push, PR, merge, release, and deploy behind explicit human gates
+
 ## [0.5.7](https://github.com/prjct-app/pi-team/compare/v0.5.6...v0.5.7) (2026-09-10)
 
 ### Bug Fixes

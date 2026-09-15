@@ -1,8 +1,9 @@
+import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { installTeam } from '../src/index.ts';
 
 type Handler = (event: any, ctx: any) => unknown;
-export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; autoTurns?: number; confirm?: boolean } = {}) {
+export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; autoTurns?: number; confirm?: boolean; cwd?: string; managedRoot?: string } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
@@ -20,7 +21,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   // A fresh object each time: Pi hands the extension a new ExtensionContext on
   // session start, and code that caches per-context state must notice.
   const makeContext = () => ({
-    cwd: `/worktrees/${session}`, mode: 'tui', hasUI: true,
+    cwd: options.cwd ?? `/worktrees/${session}`, mode: 'tui', hasUI: true,
     get model() { return model; },
     isIdle: () => idle, hasPendingMessages: () => pending,
     compact: () => { throw new Error('Nothing to compact (session too small)'); },
@@ -48,7 +49,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
       if (options.triggerTurn) idle = false;
     },
   } as unknown as ExtensionAPI;
-  installTeam(api, { root, pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000, autoTurns: options.autoTurns });
+  installTeam(api, { root, managedRoot: options.managedRoot ?? join(root, '.managed'), pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000, autoTurns: options.autoTurns });
   return {
     received, notices, confirmations, entries, tools, commands, renderers, widgets,
     async emit(name: string, event: unknown = {}) {
