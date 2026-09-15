@@ -134,6 +134,7 @@ export class ManagedCoordinator {
   }
 
   isActive(): boolean { return !!this.get().team; }
+  acceptsNewObjective(): boolean { return !this.get().team || this.get().goalStatus === 'completed'; }
 
   async activate(text: string, context: ExtensionContext, explicit = false): Promise<void> {
     if ((!explicit && !shouldManagePrompt(text)) || context.mode !== 'tui') return;

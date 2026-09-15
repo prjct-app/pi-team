@@ -481,6 +481,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
       }
       if (managedCommand && !COMMANDS.includes(managedCommand)) {
         if (get().member) { context.ui.notify('Leave the manual mailbox before starting a managed objective.', 'warning'); return; }
+        if (!managed.acceptsNewObjective()) { context.ui.notify('A managed objective is already active. Open /team plan to inspect it.', 'warning'); return; }
         const objective = args.trim();
         await managed.activate(objective, context, true);
         if (!managed.isActive()) { context.ui.notify('Managed team could not start. Run this command inside a Git repository.', 'warning'); return; }

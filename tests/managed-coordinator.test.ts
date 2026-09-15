@@ -169,6 +169,9 @@ test('an explicit /team objective starts managed work and forwards the objective
   assert.equal(h.userMessages.length, 1);
   assert.deepEqual(h.userMessages[0], { content: objective, options: { expandPromptTemplates: false } });
   assert.ok(h.entries.some(entry => entry.customType === 'managed-team'));
+  await h.command('audita también la accesibilidad del repositorio');
+  assert.equal(h.userMessages.length, 1, 'A second explicit objective must not diverge from the durable active goal');
+  assert.match(h.notices.at(-1) ?? '', /already active/);
   await h.emit('session_shutdown');
 });
 
