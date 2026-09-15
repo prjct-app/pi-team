@@ -6,6 +6,7 @@ import { Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Mailbox, type Membership, type Message, type Outgoing, type Result, type Snapshot } from './mailbox.ts';
+import { publishActiveRoot } from './agents.ts';
 
 const COMMANDS = ['create', 'delete', 'rename-team', 'join', 'list', 'members', 'remove', 'rename-member', 'status', 'wake', 'send', 'note', 'inbox', 'pause', 'resume', 'leave'];
 const HELP = '/team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
@@ -187,6 +188,9 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   const autoTurns = options.autoTurns ?? autoTurnsFromEnv() ?? 5;
   const slot = { current: INITIAL };
   const get = (): Session => slot.current;
+  // Optional process-wide bridge: pi-subagents reads this provider only when
+  // it is installed beside pi-team; neither package imports the other.
+  publishActiveRoot(() => get().active?.rootId);
   const set = (update: (session: Session) => Partial<Session>): Session =>
     (slot.current = { ...slot.current, ...update(slot.current) });
 

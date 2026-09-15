@@ -75,6 +75,14 @@ pending count when work is queued for you.
 Membership is restored automatically when the same Pi session is resumed or
 reloaded. `/new` and `/fork` start unaffiliated sessions on purpose.
 
+### Optional subagents
+
+When [`@prjct.app/pi-subagents`](https://github.com/prjct-app/pi-subagents) is
+installed beside pi-team, a subagent launched while a team request is active is
+associated with that request's root id. The packages share only this small,
+process-local bridge through `Symbol.for("prjct.agents")`; neither package imports
+or requires the other, and pi-team behaves the same when pi-subagents is absent.
+
 ## Commands
 
 | Command | Meaning |
