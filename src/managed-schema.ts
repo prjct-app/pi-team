@@ -14,7 +14,7 @@ export const GoalSchema = Type.Object({
   baseBranch: Type.String({ minLength: 1, maxLength: 255 }),
   createdAt: timestamp,
   updatedAt: timestamp,
-});
+}, { additionalProperties: false });
 
 export const WorkItemSchema = Type.Object({
   id,
@@ -32,7 +32,7 @@ export const WorkItemSchema = Type.Object({
   completedAt: Type.Optional(timestamp),
   commit: Type.Optional(Type.String({ minLength: 7, maxLength: 64 })),
   tests: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 50 }),
-});
+}, { additionalProperties: false });
 
 export const BlockerSchema = Type.Object({
   id,
@@ -44,7 +44,7 @@ export const BlockerSchema = Type.Object({
   owner: Type.Optional(name),
   createdAt: timestamp,
   resolvedAt: Type.Optional(timestamp),
-});
+}, { additionalProperties: false });
 
 export const ApprovalSchema = Type.Object({
   id,
@@ -54,7 +54,7 @@ export const ApprovalSchema = Type.Object({
   requestedAt: timestamp,
   decidedAt: Type.Optional(timestamp),
   actor: Type.Optional(Type.Literal('user')),
-});
+}, { additionalProperties: false });
 
 export const AgentStateSchema = Type.Object({
   alias: name,
@@ -67,7 +67,7 @@ export const AgentStateSchema = Type.Object({
   lastSeen: timestamp,
   restarts: Type.Integer({ minimum: 0, maximum: 100 }),
   activitySeq: Type.Integer({ minimum: 0 }),
-});
+}, { additionalProperties: false });
 
 export const ManagedPlanSchema = Type.Object({
   version: Type.Literal(1),
@@ -78,7 +78,7 @@ export const ManagedPlanSchema = Type.Object({
   blockers: Type.Array(BlockerSchema, { maxItems: 200 }),
   approvals: Type.Array(ApprovalSchema, { maxItems: 20 }),
   agents: Type.Array(AgentStateSchema, { maxItems: 8 }),
-});
+}, { additionalProperties: false });
 
 export const ActivityEventSchema = Type.Object({
   seq: Type.Integer({ minimum: 1 }),
@@ -88,7 +88,7 @@ export const ActivityEventSchema = Type.Object({
   summary: Type.String({ minLength: 1, maxLength: 240 }),
   detail: Type.Optional(Type.String({ maxLength: 2_000 })),
   workItemId: Type.Optional(id),
-});
+}, { additionalProperties: false });
 
 export type Goal = {
   id: string; objective: string; status: 'planning' | 'active' | 'blocked' | 'verifying' | 'ready' | 'completed' | 'failed';

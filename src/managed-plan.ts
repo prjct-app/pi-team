@@ -29,8 +29,13 @@ export function assertManagedPlan(plan: unknown): asserts plan is ManagedPlan {
   const typed = plan as ManagedPlan;
   const ids = typed.workItems.map(item => item.id);
   const aliases = typed.agents.map(agent => agent.alias);
+  const blockerIds = typed.blockers.map(blocker => blocker.id);
+  const approvalIds = typed.approvals.map(approval => approval.id);
   if (!unique(ids)) throw new Error('Managed team work item ids must be unique');
   if (!unique(aliases)) throw new Error('Managed team agent aliases must be unique');
+  if (!unique(blockerIds)) throw new Error('Managed team blocker ids must be unique');
+  if (!unique(approvalIds)) throw new Error('Managed team approval ids must be unique');
+  if (typed.workItems.some(item => item.attempts > item.maxAttempts)) throw new Error('Managed team work item attempts cannot exceed maxAttempts');
   const known = new Set(ids);
   if (typed.workItems.some(item => item.dependsOn.includes(item.id) || item.dependsOn.some(dependency => !known.has(dependency)))) {
     throw new Error('Managed team dependencies must reference other work items');
@@ -128,10 +133,22 @@ export class ManagedPlanStore {
     assertManagedPlan(plan);
     await this.prepare(plan.team);
     if (await this.read(plan.team)) throw new Error(`Managed team "${plan.team}" already exists`);
-    return publish(this.planPath(plan.team), 0, plan, parse, {
-      maxBytes: MAX_BYTES,
-      lockPath: this.lockPath(plan.team),
-    });
+    return this.createAttempt(plan, MAX_ATTEMPTS);
+  }
+
+  private async createAttempt(plan: ManagedPlan, remaining: number): Promise<StoreRecord<ManagedPlan>> {
+    if (remaining < 1) throw new Error(`Managed team \"${plan.team}\" already exists or is being created`);
+    try {
+      return await publish(this.planPath(plan.team), 0, plan, parse, {
+        maxBytes: MAX_BYTES,
+        lockPath: this.lockPath(plan.team),
+      });
+    } catch (error) {
+      if (!['STALE_REVISION', 'RECORD_LOCKED'].includes((error as { code?: string }).code ?? '')) throw error;
+      await new Promise(resolve => setTimeout(resolve, 5 + Math.random() * 25));
+      if (await this.read(plan.team)) throw new Error(`Managed team \"${plan.team}\" already exists`);
+      return this.createAttempt(plan, remaining - 1);
+    }
   }
 
   async update(team: string, transform: (current: ManagedPlan) => ManagedPlan): Promise<StoreRecord<ManagedPlan>> {

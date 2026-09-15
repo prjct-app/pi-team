@@ -63,7 +63,7 @@ function parseLines(text: string | undefined, alias: string): ActivityEvent[] {
   return text.split('\n').filter(Boolean).flatMap(line => {
     try {
       const value = JSON.parse(line) as unknown;
-      return Value.Check(ActivityEventSchema, value) && (value as ActivityEvent).alias === alias ? [value as ActivityEvent] : [];
+      return Value.Check(ActivityEventSchema, value) && (value as ActivityEvent).alias === alias ? [sanitizeActivityEvent(value as ActivityEvent)] : [];
     } catch { return []; }
   });
 }

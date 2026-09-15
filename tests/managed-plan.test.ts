@@ -39,6 +39,9 @@ test('managed plan validates references, acyclicity, assignments, and user-only 
   assert.throws(() => assertManagedPlan({ ...value, workItems: value.workItems.map(item =>
     item.id === 'design' ? { ...item, dependsOn: ['verify'] } : item) }), /acyclic/);
   assert.throws(() => assertManagedPlan({ ...value, approvals: [{ ...value.approvals[0], status: 'granted' }] }), /only be decided by the user/);
+  assert.throws(() => assertManagedPlan({ ...value, workItems: value.workItems.map(item => item.id === 'api' ? { ...item, attempts: 3 } : item) }), /cannot exceed/);
+  assert.throws(() => assertManagedPlan({ ...value, approvals: [value.approvals[0], value.approvals[0]] }), /approval ids/);
+  assert.throws(() => assertManagedPlan({ ...value, unexpected: true }), /Invalid managed team plan/);
 });
 
 test('team view derives progress, dependencies, blockers, approvals, and the remaining critical path', () => {
@@ -70,4 +73,15 @@ test('managed plan store persists atomic revisions and retries concurrent writer
   const snapshot = await store.snapshot('managed-demo');
   assert.equal(snapshot.revision, 3);
   assert.deepEqual(snapshot.blockers.map(blocker => blocker.id).sort(), ['first', 'second']);
+});
+
+
+test('concurrent managed team creation has one winner and one stable already-exists error', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-managed-create-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ManagedPlanStore(root);
+  const outcomes = await Promise.allSettled([store.create(plan(root)), store.create(plan(root))]);
+  assert.equal(outcomes.filter(result => result.status === 'fulfilled').length, 1);
+  const rejected = outcomes.find(result => result.status === 'rejected');
+  assert.match(rejected?.status === 'rejected' ? String(rejected.reason) : '', /already exists/);
 });
