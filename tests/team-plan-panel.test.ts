@@ -14,7 +14,7 @@ function snapshot(revision = 1): TeamViewSnapshot {
   const now = Date.now();
   return {
     revision, team: 'release-team',
-    goal: { id: 'goal', objective: 'Ship the coordinated release', status: 'active', repoRoot: '/repo', baseBranch: 'develop', createdAt: now, updatedAt: now },
+    goal: { id: 'goal', objective: 'Ship the coordinated release', status: 'active', repoRoot: '/repo', baseBranch: 'develop', baseCommit: 'a'.repeat(40), createdAt: now, updatedAt: now },
     progress: { completed: 1, total: 3, percent: 33 },
     workItems: [
       { id: 'api', title: 'Build API', detail: '', kind: 'implementation', status: 'active', dependsOn: [], assignee: 'backend', attempts: 1, maxAttempts: 2, createdAt: now, updatedAt: now, tests: [] },
@@ -26,7 +26,7 @@ function snapshot(revision = 1): TeamViewSnapshot {
     approvals: [{ id: 'publish', kind: 'publish-pr', status: 'required', summary: 'Publish and open PR', requestedAt: now }],
     agents: [
       { alias: 'backend', role: 'Backend engineer', status: 'active', worktree: '/worktrees/backend', branch: 'team/backend', workItemId: 'api', lastSeen: now, restarts: 0, activitySeq: 1 },
-      { alias: 'frontend', role: 'Frontend engineer', status: 'waiting', worktree: '/worktrees/frontend', branch: 'team/frontend', workItemId: 'ui', lastSeen: now, restarts: 0, activitySeq: 1 },
+      { alias: 'frontend', role: 'Frontend engineer', status: 'waiting', worktree: '/worktrees/frontend', branch: 'team/frontend', lastSeen: now, restarts: 0, activitySeq: 1 },
     ],
     criticalPath: ['api', 'ui', 'verify'],
     activity: {

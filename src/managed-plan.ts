@@ -49,8 +49,22 @@ export function assertManagedPlan(plan: unknown): asserts plan is ManagedPlan {
   if (typed.agents.some(agent => agent.workItemId && !known.has(agent.workItemId))) {
     throw new Error('Managed team agent state must reference a known work item');
   }
-  if (typed.approvals.some(approval => approval.status !== 'required' && approval.actor !== 'user')) {
-    throw new Error('Managed team approvals can only be decided by the user');
+  if (typed.approvals.some(approval => approval.status === 'required'
+    ? approval.actor !== undefined || approval.decidedAt !== undefined
+    : approval.actor !== 'user' || approval.decidedAt === undefined)) {
+    throw new Error('Managed team approvals can only be decided by the user and must record the decision time');
+  }
+  const activePeerItems = typed.workItems.filter(item => item.status === 'active' && !['integration', 'verification'].includes(item.kind));
+  if (new Set(activePeerItems.map(item => item.assignee)).size !== activePeerItems.length || activePeerItems.some(item => !item.assignee)) {
+    throw new Error('Active managed peer work must have one distinct assignee');
+  }
+  if (typed.agents.some(agent => agent.status === 'active'
+    ? !agent.workItemId || !activePeerItems.some(item => item.id === agent.workItemId && item.assignee === agent.alias)
+    : agent.workItemId !== undefined)) {
+    throw new Error('Managed agent activity must match its assigned active work item');
+  }
+  if (activePeerItems.some(item => !typed.agents.some(agent => agent.alias === item.assignee && agent.status === 'active' && agent.workItemId === item.id))) {
+    throw new Error('Every active managed peer work item must match its agent state');
   }
   const visiting = new Set<string>();
   const visited = new Set<string>();

@@ -12,6 +12,7 @@ export const GoalSchema = Type.Object({
   status: enumOf('planning', 'active', 'blocked', 'verifying', 'ready', 'completed', 'failed'),
   repoRoot: path,
   baseBranch: Type.String({ minLength: 1, maxLength: 255 }),
+  baseCommit: Type.String({ pattern: '^[a-f0-9]{40,64}$' }),
   createdAt: timestamp,
   updatedAt: timestamp,
 }, { additionalProperties: false });
@@ -92,7 +93,7 @@ export const ActivityEventSchema = Type.Object({
 
 export type Goal = {
   id: string; objective: string; status: 'planning' | 'active' | 'blocked' | 'verifying' | 'ready' | 'completed' | 'failed';
-  repoRoot: string; baseBranch: string; createdAt: number; updatedAt: number;
+  repoRoot: string; baseBranch: string; baseCommit: string; createdAt: number; updatedAt: number;
 };
 export type WorkItem = {
   id: string; title: string; detail: string;

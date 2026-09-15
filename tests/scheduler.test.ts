@@ -16,7 +16,7 @@ function plan(root: string): ManagedPlan {
   });
   return {
     version: 1, team: 'demo', leadSession: 'lead',
-    goal: { id: 'goal', objective: 'Build and verify', status: 'planning', repoRoot: root, baseBranch: 'develop', createdAt: now, updatedAt: now },
+    goal: { id: 'goal', objective: 'Build and verify', status: 'planning', repoRoot: root, baseBranch: 'develop', baseCommit: 'a'.repeat(40), createdAt: now, updatedAt: now },
     workItems: [
       item('api', 'implementation', [], 'backend'), item('ui', 'implementation', [], 'frontend'),
       item('review', 'review', ['api', 'ui'], 'backend'), item('integrate', 'integration', ['review']),

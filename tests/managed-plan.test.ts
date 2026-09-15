@@ -14,7 +14,7 @@ function plan(root: string): ManagedPlan {
     leadSession: 'lead-session',
     goal: {
       id: 'goal-1', objective: 'Implement the release safely', status: 'active',
-      repoRoot: root, baseBranch: 'develop', createdAt: now, updatedAt: now,
+      repoRoot: root, baseBranch: 'develop', baseCommit: 'a'.repeat(40), createdAt: now, updatedAt: now,
     },
     workItems: [
       { id: 'design', title: 'Design', detail: '', kind: 'plan', status: 'completed', dependsOn: [], attempts: 1, maxAttempts: 2, createdAt: now, updatedAt: now, completedAt: now, tests: [] },
@@ -26,7 +26,7 @@ function plan(root: string): ManagedPlan {
     approvals: [{ id: 'publish', kind: 'publish-pr', status: 'required', summary: 'Publish branch and open PR', requestedAt: now }],
     agents: [
       { alias: 'backend', role: 'Backend engineer', status: 'active', worktree: join(root, 'backend'), branch: 'team/backend', workItemId: 'api', lastSeen: now, restarts: 0, activitySeq: 2 },
-      { alias: 'frontend', role: 'Frontend engineer', status: 'waiting', worktree: join(root, 'frontend'), branch: 'team/frontend', workItemId: 'ui', lastSeen: now, restarts: 0, activitySeq: 0 },
+      { alias: 'frontend', role: 'Frontend engineer', status: 'waiting', worktree: join(root, 'frontend'), branch: 'team/frontend', lastSeen: now, restarts: 0, activitySeq: 0 },
     ],
   };
 }
