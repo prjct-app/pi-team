@@ -19,9 +19,10 @@ function stripControls(text: string): string {
 /** Redact common credential shapes before activity reaches disk or the TUI. */
 export function sanitizeActivityText(text: string, limit: number): string {
   return stripControls(text)
+    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, '[redacted]')
     .replace(/\b(Bearer)\s+[^\s,;]+/gi, '$1 [redacted]')
     .replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
-    .replace(/\b(?:gh[opusr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{16,})\b/g, '[redacted]')
+    .replace(/\b(?:gh[opusr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, '[redacted]')
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[redacted]@')
     .slice(0, limit);
 }

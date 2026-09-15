@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -104,7 +104,65 @@ test('integration and verification are local coordinator operations, not peer pr
   const verification: WorkItem = { ...integration, id: 'verification', title: 'Verify', kind: 'verification', status: 'verifying', dependsOn: ['integration'] };
   const verified = await runtime.execute({ ...data.plan, workItems: [data.item, { ...integration, status: 'completed', commit: 'c'.repeat(40) }, verification] }, verification);
   assert.deepEqual(scripts, ['check', 'test']);
-  assert.deepEqual(verified.tests, ['npm run check', 'npm run test']);
+  assert.deepEqual(verified.tests, ['node --run check', 'node --run test']);
+});
+
+test('verification uses node --run with a sanitized env and skips npm lifecycle hooks', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-verify-env-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'package.json'), JSON.stringify({
+    scripts: {
+      pretest: `${process.execPath} -e "require('node:fs').writeFileSync('pretest-hook.txt', 'ran')"`,
+      test: `${process.execPath} -e "require('node:fs').writeFileSync('child-env.json', JSON.stringify(process.env))"`,
+    },
+  }));
+  const names = ['GIT_DIR', 'GITHUB_TOKEN', 'NODE_OPTIONS'] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const restore = () => {
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  };
+  t.after(restore);
+  process.env.GIT_DIR = join(tmpdir(), 'pi-team-missing-git-dir');
+  process.env.GITHUB_TOKEN = 'ghs_probe';
+  process.env.NODE_OPTIONS = '--throw-deprecation';
+  const data = fixture(root);
+  const runtime = new ManagedExecutionRuntime({
+    team: 'demo', worktrees: worktrees(root).value,
+    createSession: async () => { throw new Error('Verification must not create a model session'); },
+  });
+  const verification: WorkItem = { ...data.item, id: 'verification', title: 'Verify', kind: 'verification', status: 'verifying', dependsOn: ['integration'], assignee: undefined, commit: undefined };
+  try {
+    const verified = await runtime.execute({ ...data.plan, workItems: [data.item, verification] }, verification);
+    assert.equal(verified.outcome, 'completed');
+    assert.deepEqual(verified.tests, ['node --run test']);
+    assert.equal(await readFile(join(root, 'pretest-hook.txt'), 'utf8').catch(() => ''), '');
+    const env = JSON.parse(await readFile(join(root, 'child-env.json'), 'utf8')) as NodeJS.ProcessEnv;
+    assert.equal(env.GIT_DIR, undefined);
+    assert.equal(env.GITHUB_TOKEN, undefined);
+    assert.equal(env.NODE_OPTIONS, undefined);
+  } finally {
+    restore();
+  }
+});
+
+test('verification refuses a symlinked or oversized package.json', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-verify-unsafe-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const data = fixture(root);
+  const verification: WorkItem = { ...data.item, id: 'verification', title: 'Verify', kind: 'verification', status: 'verifying', dependsOn: ['integration'], assignee: undefined, commit: undefined };
+  const runtimeFor = () => new ManagedExecutionRuntime({
+    team: 'demo', worktrees: worktrees(root).value,
+    createSession: async () => { throw new Error('Unsafe manifests must fail before a session starts'); },
+  });
+  await writeFile(join(root, 'real-package.json'), JSON.stringify({ scripts: { test: 'true' } }));
+  await symlink(join(root, 'real-package.json'), join(root, 'package.json'));
+  await assert.rejects(runtimeFor().execute({ ...data.plan, workItems: [data.item, verification] }, verification), /Unsafe package\.json|ELOOP|symbolic/);
+  await rm(join(root, 'package.json'));
+  await writeFile(join(root, 'package.json'), 'x'.repeat(1_048_577));
+  await assert.rejects(runtimeFor().execute({ ...data.plan, workItems: [data.item, verification] }, verification), /Unsafe package\.json/);
 });
 
 test('corrective peers receive completed peer commits without replaying integration commits', async (t) => {

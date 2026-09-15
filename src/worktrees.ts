@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { identifier } from './mailbox.ts';
+import { childEnv } from './process-env.ts';
 import { withFileLock } from './store.ts';
 
 export type GitResult = { stdout: string; stderr: string };
@@ -9,6 +10,7 @@ export type GitRunner = (cwd: string, args: readonly string[]) => Promise<GitRes
 export type RepositoryState = { root: string; branch: string; head: string; clean: boolean };
 export type ManagedWorktree = { alias: string; path: string; branch: string; head: string; reused: boolean };
 const ALLOCATION_ATTEMPTS = 100;
+const WORKTREE_LOCK_STALE_MS = 10 * 60 * 1000;
 
 export type IntegrationResult = { ok: true; head: string; applied: string[] } | { ok: false; commit: string; error: string; applied: string[] };
 
@@ -18,7 +20,7 @@ function reason(error: unknown): string {
 
 export const runGit: GitRunner = (cwd, args) => new Promise((resolvePromise, reject) => {
   execFile('git', ['-C', cwd, ...args], {
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '1' },
+    env: childEnv({ extra: { GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '1' }, excludeFromPath: [cwd] }),
     maxBuffer: 4_000_000,
   }, (error, stdout, stderr) => {
     if (error) {
@@ -49,6 +51,22 @@ async function missing(path: string): Promise<boolean> {
 async function succeeds(action: Promise<unknown>): Promise<boolean> {
   try { await action; return true; }
   catch { return false; }
+}
+
+function posixBasename(path: string): string {
+  const parts = path.replaceAll('\\', '/').split('/');
+  return parts[parts.length - 1] ?? path;
+}
+
+function secretPath(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/');
+  const base = posixBasename(normalized);
+  if (base === '.env' || base.startsWith('.env.') || base === '.netrc') return true;
+  if (base === 'id_rsa' || base === 'id_ed25519') return true;
+  if (base.endsWith('.pem') || base.endsWith('.p12') || base.endsWith('.pfx')) return true;
+  if ((base === 'credentials.json' || base === 'auth.json') &&
+      normalized.split('/').some(part => part.startsWith('.') && part !== base)) return true;
+  return false;
 }
 
 export async function discoverRepository(cwd: string, git: GitRunner = runGit): Promise<RepositoryState> {
@@ -106,7 +124,7 @@ export class WorktreeManager {
         ? ['worktree', 'add', worktreePath, branch]
         : ['worktree', 'add', '-b', branch, worktreePath, baseRef]);
       return { alias, path: worktreePath, branch, head: (await this.git(worktreePath, ['rev-parse', 'HEAD'])).stdout, reused: false };
-    }); } catch (error) {
+    }, { staleMs: WORKTREE_LOCK_STALE_MS, livePid: true }); } catch (error) {
       if ((error as { code?: string }).code !== 'RECORD_LOCKED') throw error;
       await new Promise(resolvePromise => setTimeout(resolvePromise, 5 + Math.random() * 25));
       return this.allocateAttempt(root, team, alias, baseRef, remaining - 1);
@@ -122,6 +140,14 @@ export class WorktreeManager {
     const safeMessage = message.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
     if (!safeMessage) throw new Error('Commit message is required');
     await this.git(worktree.path, ['add', '-A']);
+    const staged = (await this.git(worktree.path, ['diff', '--cached', '--name-only', '-z'])).stdout
+      .split('\0')
+      .filter(Boolean);
+    const secret = staged.find(secretPath);
+    if (secret) {
+      await this.git(worktree.path, ['reset', '-q', 'HEAD']).catch(() => {});
+      throw new Error(`Refusing to commit secret path: ${secret}`);
+    }
     await this.git(worktree.path, ['commit', '-m', safeMessage]);
     return { head: (await this.git(worktree.path, ['rev-parse', 'HEAD'])).stdout, changed: true };
   }

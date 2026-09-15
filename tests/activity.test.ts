@@ -12,6 +12,20 @@ test('activity text removes terminal controls and common credentials', () => {
   assert.match(text, /api_key=\[redacted\]/);
 });
 
+test('activity text redacts cloud, package, chat, and private-key credentials', () => {
+  const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEvSecretKeyMaterial\n-----END RSA PRIVATE KEY-----';
+  const text = sanitizeActivityText([
+    'AKIAIOSFODNN7EXAMPLE',
+    'sk-ant-api03-abcdefghijklmnopqrstuvwxyz',
+    'github_pat_11AAAAAAAABBBBBBBBBB',
+    'npm_abcdefghijklmnopqrstuvwxyz012345',
+    'xoxb-12345678901-abcdefghij',
+    pem,
+  ].join(' '), 2_000);
+  assert.doesNotMatch(text, /AKIA|sk-ant-|github_pat_|npm_|xoxb-|MIIEv|PRIVATE KEY/);
+  assert.match(text, /\[redacted\]/);
+});
+
 test('activity journals are structured, ordered, private, sanitized, and reject stale sequences', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-activity-'));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { envelope, publish, readRecord, readRecordCached, sha256, writeAtomic } from '../src/store.ts';
+import { envelope, publish, readRecord, readRecordCached, sha256, withFileLock, writeAtomic } from '../src/store.ts';
 
 const MAX = 1_000_000;
 
@@ -39,6 +39,22 @@ test('corrupted records throw and are preserved for manual recovery', async (t) 
   await assert.rejects(readRecordCached(path, envelope, MAX), /hash mismatch/);
 });
 
+test('the read cache does not retain every unique path', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-store-cache-cap-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const paths = Array.from({ length: 80 }, (_, i) => join(root, `state-${i}.json`));
+  const records = [];
+  for (const [i, path] of paths.entries()) {
+    const payload = JSON.stringify({ i });
+    await writeAtomic(path, `{"schemaVersion":1,"revision":1,"contentHash":"${sha256(payload)}","payload":${payload}}`, 'none');
+    records.push(await readRecordCached(path, envelope, MAX));
+  }
+  assert.equal(await readRecordCached(paths.at(-1)!, envelope, MAX), records.at(-1),
+    'Recent records remain cached');
+  assert.notEqual(await readRecordCached(paths[0], envelope, MAX), records[0],
+    'Inserting more unique paths does not retain every record');
+});
+
 test('the stat-validated cache follows external writes to the same path', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-store-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -53,6 +69,19 @@ test('the stat-validated cache follows external writes to the same path', async 
   const payload = '{"count":7}';
   await writeAtomic(path, `{"schemaVersion":1,"revision":3,"contentHash":"${sha256(payload)}","payload":${payload}}`, 'light');
   assert.deepEqual((await readRecordCached(path, envelope, MAX))?.payload, { count: 7 });
+});
+
+test('a custom short stale window reclaims a dead lock', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-store-stale-ms-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lockPath = join(root, 'custom.lock');
+  await writeFile(lockPath, '', { flag: 'wx', mode: 0o600 });
+  const recent = new Date(Date.now() - 200);
+  await utimes(lockPath, recent, recent);
+  await assert.rejects(withFileLock(lockPath, async () => 'default'), /Another writer/);
+  const reclaimed = await withFileLock(lockPath, async () => 'ok', { staleMs: 50 });
+  assert.equal(reclaimed, 'ok');
+  assert.equal(await stat(lockPath).catch(() => undefined), undefined, 'The lock is released');
 });
 
 test('a lock abandoned by a crashed writer is broken after going stale', async (t) => {

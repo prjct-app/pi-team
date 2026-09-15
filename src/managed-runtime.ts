@@ -1,9 +1,12 @@
 import { execFile } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, open } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Model } from '@earendil-works/pi-ai/compat';
 import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSessionEvent, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import type { ManagedAgentState, ManagedPlan, WorkItem } from './managed-schema.ts';
+import { childEnv } from './process-env.ts';
 import type { ExecutionResult, SchedulerRuntime } from './scheduler.ts';
 import { WorktreeManager } from './worktrees.ts';
 
@@ -81,8 +84,34 @@ const defaultSessionFactory: PeerSessionFactory = async options => {
   return session;
 };
 
+const PACKAGE_JSON_BYTES = 1_048_576;
+
+function assertSafeManifest(path: string, info: { isFile(): boolean; size: number; mode: number; uid: number }): void {
+  if (!info.isFile() || info.size > PACKAGE_JSON_BYTES || (info.mode & 0o022) !== 0 ||
+      (process.getuid && info.uid !== process.getuid())) {
+    throw new Error(`Unsafe package.json: ${path}. Expected a regular file owned by this user.`);
+  }
+}
+
+async function readPackageScripts(worktreePath: string): Promise<string[]> {
+  const path = join(worktreePath, 'package.json');
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') throw new Error(`Unsafe package.json: ${path}`);
+    throw error;
+  });
+  try {
+    assertSafeManifest(path, await handle.stat());
+    const manifest = JSON.parse(await handle.readFile('utf8')) as { scripts?: Record<string, unknown> };
+    return ['check', 'test', 'check:package'].filter(script => typeof manifest.scripts?.[script] === 'string');
+  } finally { await handle.close(); }
+}
+
 const defaultVerify: VerificationRunner = (cwd, script) => new Promise((resolvePromise, reject) => {
-  execFile('npm', ['run', script], { cwd, env: { ...process.env, CI: '1', GIT_TERMINAL_PROMPT: '0' }, maxBuffer: 8_000_000 }, (error, _stdout, stderr) => {
+  execFile(process.execPath, ['--run', script], {
+    cwd,
+    env: childEnv({ extra: { CI: '1', GIT_TERMINAL_PROMPT: '0' }, excludeFromPath: [cwd] }),
+    maxBuffer: 8_000_000,
+  }, (error, _stdout, stderr) => {
     if (error) { reject(new Error(String(stderr).trim() || error.message)); return; }
     resolvePromise();
   });
@@ -199,10 +228,9 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
 
   private async verification(plan: ManagedPlan): Promise<ExecutionResult> {
     const worktree = await this.options.worktrees.allocate(plan.goal.repoRoot, plan.team, 'integration', plan.goal.baseCommit);
-    const manifest = JSON.parse(await readFile(`${worktree.path}/package.json`, 'utf8')) as { scripts?: Record<string, unknown> };
-    const scripts = ['check', 'test', 'check:package'].filter(script => typeof manifest.scripts?.[script] === 'string');
+    const scripts = await readPackageScripts(worktree.path);
     for (const script of scripts) await this.verify(worktree.path, script);
-    return { outcome: 'completed', summary: scripts.length ? `Verification passed: ${scripts.join(', ')}` : 'No standard verification scripts were found.', tests: scripts.map(script => `npm run ${script}`) };
+    return { outcome: 'completed', summary: scripts.length ? `Verification passed: ${scripts.join(', ')}` : 'No standard verification scripts were found.', tests: scripts.map(script => `node --run ${script}`) };
   }
 
   async execute(plan: ManagedPlan, item: WorkItem, agent?: ManagedAgentState): Promise<ExecutionResult> {
