@@ -511,6 +511,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
               ui.notify(`Renamed ${a} to ${b}.`, 'info'); break;
             }
             case 'join': {
+              if (managed.isActive()) throw new Error('This session already leads a managed team; use a separate session for a manual mailbox.');
               if (get().member) throw new Error('Leave the current team before joining another.');
               if (!a || !b || rest.length) throw new Error('Usage: /team join <team> <alias>');
               const member = await box.join(a, b, context.sessionManager.getSessionId(), context.cwd);
@@ -640,7 +641,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
     const data = saved?.type === 'custom' ? saved.data as {
       team?: string; alias?: string; session?: string; paused?: boolean;
     } | null : null;
-    if (data?.team && data.alias && data.session === context.sessionManager.getSessionId() && event.reason !== 'fork' && event.reason !== 'new') {
+    if (!managed.isActive() && data?.team && data.alias && data.session === context.sessionManager.getSessionId() && event.reason !== 'fork' && event.reason !== 'new') {
       try {
         const member = await box.join(data.team, data.alias, data.session, context.cwd);
         set(() => ({ member, paused: data.paused ?? false, pauseReason: data.paused ? 'recovery' : undefined }));

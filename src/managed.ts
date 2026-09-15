@@ -133,14 +133,21 @@ export class ManagedCoordinator {
     });
   }
 
+  isActive(): boolean { return !!this.get().team; }
+
   async activate(text: string, context: ExtensionContext): Promise<void> {
-    if (this.get().team || !shouldManagePrompt(text) || context.mode !== 'tui') return;
+    if (!shouldManagePrompt(text) || context.mode !== 'tui') return;
+    if (this.get().team && this.get().goalStatus !== 'completed') return;
+    if (this.get().team) {
+      if (this.get().timer) clearInterval(this.get().timer);
+      this.get().scheduler?.stop();
+      this.get().runtime?.dispose();
+      context.ui.setWidget('managed-team', undefined);
+      this.set(() => ({ team: undefined, goalStatus: undefined, reportedStatus: undefined, scheduler: undefined, runtime: undefined, timer: undefined, lastWidget: undefined }));
+    }
     try {
       const repository = await this.discover(context.cwd);
-      if (!repository.clean) {
-        context.ui.notify('Managed team not started: commit or stash existing checkout changes first.', 'warning');
-        return;
-      }
+      if (!repository.clean) context.ui.notify('Managed peers start from committed HEAD; existing checkout changes remain untouched and are not included.', 'warning');
       const team = managedTeamName(context.sessionManager.getSessionId(), text);
       const existing = await this.store.read(team);
       if (!existing) await this.store.create(createPlanningPlan(team, context.sessionManager.getSessionId(), text, repository));

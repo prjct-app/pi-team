@@ -186,7 +186,7 @@ asks your agent to chase the teammate or tell you what is blocked. See
 - Managed peers get full coding tools, including unrestricted Bash, inside their
   dedicated worktree. A worktree is collision isolation, **not an OS sandbox**.
 - Managed integration uses full hexadecimal commit ids and never pushes. Existing
-  dirty user checkouts prevent automatic activation rather than being absorbed.
+  user-checkout changes remain untouched and are excluded from the peers' exact-HEAD base.
 - Activity journals contain bounded, sanitized events—not chain-of-thought or raw
   conversation logs—and rotate at 512 KB.
 - `publish-pr` and `ship` are durable, separate gates. Only an interactive user

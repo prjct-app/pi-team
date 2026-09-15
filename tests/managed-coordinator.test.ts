@@ -119,6 +119,10 @@ test('one normal prompt creates a plan; blueprint submission advances autonomous
   assert.equal(shipped.isError, undefined);
   assert.equal((await coordinator.snapshot()).goal.status, 'completed');
   assert.deepEqual(ctx.confirmations, ['Approve publish-pr?', 'Approve ship?']);
+  const completedTeam = (await coordinator.snapshot()).team;
+  await coordinator.activate('Implement a second independent feature', ctx.value);
+  assert.notEqual((await coordinator.snapshot()).team, completedTeam);
+  assert.equal((await coordinator.snapshot()).goal.status, 'planning');
   coordinator.shutdown();
 });
 
@@ -143,4 +147,22 @@ test('the installed extension activates from ordinary input without create, join
   assert.equal(snapshot.goal.status, 'planning');
   assert.match(h.notices.at(-1) ?? '', /is planning from develop@/);
   assert.ok(!h.notices.some(notice => /Joined|wake|resume/.test(notice)));
+  await h.command('create manual');
+  await h.command('join manual lead');
+  assert.match(h.notices.at(-1) ?? '', /already leads a managed team/);
+});
+
+
+test('dirty user checkout state is preserved and excluded rather than blocking autonomous work', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-coordinator-dirty-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const extension = api();
+  const ctx = context(extension.entries);
+  const coordinator = new ManagedCoordinator(extension.value, {
+    root, discover: async () => ({ root: '/repo', branch: 'feature/user', head: 'a'.repeat(40), clean: false }), worktrees: worktrees(),
+  });
+  await coordinator.activate('Build a new reporting dashboard', ctx.value);
+  assert.equal((await coordinator.snapshot()).goal.baseCommit, 'a'.repeat(40));
+  assert.ok(ctx.notices.some(notice => /changes remain untouched and are not included/i.test(notice)));
+  coordinator.shutdown();
 });
