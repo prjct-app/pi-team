@@ -1,5 +1,5 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
-import { matchesKey, truncateToWidth, type Component, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
+import { matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from '@earendil-works/pi-tui';
 import { sanitizeActivityText } from './activity.ts';
 import type { ActivityEvent, ManagedAgentState, TeamViewSnapshot, WorkItem } from './managed-schema.ts';
 
@@ -22,6 +22,11 @@ const STATUS_SYMBOL: Record<string, string> = {
 
 function safe(text: string, limit = 2_000): string {
   return sanitizeActivityText(text, limit).replace(/\s+/g, ' ').trim();
+}
+
+function fit(text: string, width: number): string {
+  const truncated = truncateToWidth(text, width);
+  return `${truncated}${' '.repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
 
 function statusColor(status: string): 'success' | 'error' | 'warning' | 'accent' | 'muted' | 'dim' {
@@ -66,8 +71,10 @@ export class TeamPlanPanel implements Component, Focusable {
   private tab: Tab = 'plan';
   private selectedAlias?: string;
   private follow = true;
+  private activityOffset = 0;
   private closed = false;
   private refreshToken = 0;
+  private protectedRevision?: number;
   private timer?: ReturnType<typeof setInterval>;
   private rowAliases = new Map<number, string>();
 
@@ -83,16 +90,20 @@ export class TeamPlanPanel implements Component, Focusable {
     const token = ++this.refreshToken;
     try {
       const next = await this.options.load();
-      if (this.closed || token !== this.refreshToken || next.revision < this.snapshot.revision) return;
+      if (this.closed || token !== this.refreshToken || next.revision < this.snapshot.revision || (this.protectedRevision !== undefined && next.revision <= this.protectedRevision)) return;
+      this.protectedRevision = undefined;
       this.snapshot = structuredClone(next);
-      if (!this.snapshot.agents.some(agent => agent.alias === this.selectedAlias)) this.selectedAlias = this.snapshot.agents[0]?.alias;
+      if (!this.snapshot.agents.some(agent => agent.alias === this.selectedAlias)) { this.selectedAlias = this.snapshot.agents[0]?.alias; this.activityOffset = 0; }
       this.options.tui.requestRender();
     } catch { /* The next refresh retries without replacing the last good snapshot. */ }
   }
 
   setSnapshot(snapshot: TeamViewSnapshot): void {
     if (snapshot.revision < this.snapshot.revision) return;
+    this.refreshToken++;
+    this.protectedRevision = snapshot.revision;
     this.snapshot = structuredClone(snapshot);
+    if (!this.snapshot.agents.some(agent => agent.alias === this.selectedAlias)) { this.selectedAlias = this.snapshot.agents[0]?.alias; this.activityOffset = 0; }
     this.options.tui.requestRender();
   }
 
@@ -101,7 +112,8 @@ export class TeamPlanPanel implements Component, Focusable {
     const current = Math.max(0, this.snapshot.agents.findIndex(agent => agent.alias === this.selectedAlias));
     const index = Math.max(0, Math.min(this.snapshot.agents.length - 1, current + delta));
     this.selectedAlias = this.snapshot.agents[index]?.alias;
-    this.follow = false;
+    this.follow = true;
+    this.activityOffset = 0;
   }
 
   handleInput(data: string): void {
@@ -113,7 +125,9 @@ export class TeamPlanPanel implements Component, Focusable {
     else if (matchesKey(data, '3')) this.tab = 'blockers';
     else if (matchesKey(data, 'up')) { this.tab = 'agents'; this.select(-1); }
     else if (matchesKey(data, 'down')) { this.tab = 'agents'; this.select(1); }
-    else if (matchesKey(data, 'f')) this.follow = !this.follow;
+    else if (matchesKey(data, 'pageUp')) { this.tab = 'agents'; this.follow = false; this.activityOffset += 5; }
+    else if (matchesKey(data, 'pageDown')) { this.tab = 'agents'; this.activityOffset = Math.max(0, this.activityOffset - 5); this.follow = this.activityOffset === 0; }
+    else if (matchesKey(data, 'f')) { this.follow = !this.follow; if (this.follow) this.activityOffset = 0; }
     else return;
     this.options.tui.requestRender();
   }
@@ -125,6 +139,7 @@ export class TeamPlanPanel implements Component, Focusable {
     this.tab = 'agents';
     this.selectedAlias = alias;
     this.follow = true;
+    this.activityOffset = 0;
     this.options.tui.requestRender();
     return { handled: true, focus: true, render: true };
   }
@@ -150,7 +165,8 @@ export class TeamPlanPanel implements Component, Focusable {
     const selected = this.snapshot.agents.find(agent => agent.alias === this.selectedAlias);
     if (!selected) return [this.options.theme.bold('Agents'), ...rows];
     const events = this.snapshot.activity[selected.alias] ?? [];
-    const activity = events.slice(-8).map(event => activityLabel(event, this.options.theme));
+    const end = Math.max(0, events.length - Math.min(this.activityOffset, Math.max(0, events.length - 1)));
+    const activity = events.slice(Math.max(0, end - 8), end).map(event => activityLabel(event, this.options.theme));
     return [
       this.options.theme.bold('Agents'), ...rows, '',
       `${this.options.theme.bold(safe(selected.alias, 48))} · ${safe(selected.branch, 255)}`,
@@ -183,8 +199,8 @@ export class TeamPlanPanel implements Component, Focusable {
       '',
     ];
     const body = this.tab === 'plan' ? this.planLines() : this.tab === 'agents' ? this.agentLines(header.length + 1) : this.blockerLines();
-    const footer = ['', theme.fg('dim', '1 plan · 2 agents · 3 blockers · ↑↓ select · f follow · Esc close')];
-    const content = [...header, ...body, ...footer].map(line => `│${truncateToWidth(line.padEnd(Math.max(0, inner)), inner)}│`);
+    const footer = ['', theme.fg('dim', '1 plan · 2 agents · 3 blockers · ↑↓ select · PgUp/PgDn activity · f follow · Esc close')];
+    const content = [...header, ...body, ...footer].map(line => `│${fit(line, inner)}│`);
     return [`╭${'─'.repeat(inner)}╮`, ...content, `╰${'─'.repeat(inner)}╯`];
   }
 

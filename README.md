@@ -2,12 +2,13 @@
 
 [![pi-team — extension for PI Agent](https://raw.githubusercontent.com/prjct-app/pi-clipboard/main/docs/covers/pi-team.png)](https://pi.dev)
 
-Coordinate independent PI Agent sessions with local team messaging, queued tasks,
-and shared results.
+Turn a normal implementation prompt into an autonomous local team of persistent
+Pi sessions. Every managed peer works on its own branch and Git worktree; pi-team
+advances a dependency plan, retries or reassigns failed work, integrates locally,
+runs verification, and returns one consolidated result through the lead session.
 
-You open the terminals; `pi-team` lets those sessions send each other work, wake a
-free teammate, and return a result the requester can verify. Everything stays on
-this machine, in local files.
+The original explicit mailbox workflow remains available when you prefer to open
+and connect terminals yourself. Both modes keep coordination state on this machine.
 
 [![Watch the pi-team demo](media/pi-team-demo/poster.png)](https://github.com/prjct-app/pi-team/raw/refs/heads/main/media/pi-team-demo/pi-team-demo.mp4)
 
@@ -26,41 +27,61 @@ same extension from both GitHub and npm: Pi treats those as different packages.
 
 ## Quickstart
 
-Open two interactive Pi terminals. In the first:
+Start Pi in a clean Git checkout and describe an implementation objective normally:
 
 ```text
+Implement account settings with API validation, UI states, tests, and documentation.
+```
+
+No `/team create`, `join`, `wake`, `up`, or `resume` is needed. For an action-oriented
+implementation prompt, pi-team creates a durable planning goal. The lead submits a
+bounded DAG through `team_plan`; up to eight persistent peer sessions then run in
+dedicated `pi-team/<team>/<alias>` branches and private worktrees. Integration and
+standard `check`, `test`, and `check:package` scripts run locally and automatically.
+
+The compact widget shows progress. Open `/team plan` for the live plan, dependencies,
+blockers, approvals, and clickable member activity. Arrow keys provide the same member
+navigation; Page Up/Page Down browse activity and `f` returns to follow mode.
+
+Push and pull-request creation remain blocked at the `publish-pr` gate. Explicitly run
+`/team approve publish-pr` when the proposed local result is ready to publish. After
+publication is reported, `ship` appears as a separate gate; `/team approve ship` is a
+second authorization for merge, release, or deployment. Peer output never grants either.
+
+### Manual mailbox mode
+
+To coordinate terminals you opened yourself, create and join a mailbox explicitly:
+
+```text
+# terminal one
 /team create demo
 /team join demo coordinator
-```
 
-In the second:
-
-```text
+# terminal two
 /team join demo reviewer
-```
 
-Back in the first:
-
-```text
-/team note reviewer Please review the current README.
+# terminal one again
 /team send reviewer Add a limits table to the README.
 ```
 
-The note appears in the reviewer's transcript without starting any model work.
-The request wakes the reviewer once it is idle, and its result comes back to the
-coordinator. Installing alone never joins a team.
+A note is display-only; a request wakes the joined reviewer once idle and returns a
+correlated result. Installing alone never joins a manual mailbox.
 
 Supported on Linux and macOS with local disk storage. Network filesystems,
 cross-machine messaging, and native Windows are not supported.
 
 ## Concepts
 
-A **team** is a named local mailbox. A session joins under an **alias**: an
-address, not a privileged role or an automatic persona, and shared rather than
-private — anyone using this OS account can rejoin an offline alias and see its
-history. Each session keeps its own model, cwd, instructions, permissions, and
-conversation. Two agents editing the same files can still overwrite each other:
-this package does not manage file ownership.
+A **managed team** belongs to one lead session and one Git objective. Its plan,
+agent states, blockers, approvals, and structured activity live under
+`~/.pi/agent/managed-teams/`. Each peer is an independent persistent Pi session with
+a dedicated branch, worktree, role, and current work item. The lead is the only human
+interface and never treats peer output as authorization.
+
+A **manual team** is a named local mailbox. A session joins under an **alias**: an
+address, not a privileged role or automatic persona, and shared rather than private —
+anyone using this OS account can rejoin an offline alias and see its history. Manual
+mailbox sessions retain their own cwd and do not receive managed worktree allocation.
 
 | Kind | Meaning |
 | --- | --- |
@@ -87,6 +108,9 @@ or requires the other, and pi-team behaves the same when pi-subagents is absent.
 
 | Command | Meaning |
 | --- | --- |
+| `/team plan` | Open the live managed Team Plan overlay |
+| `/team approve publish-pr` | Confirm the first human gate for push and pull-request creation |
+| `/team approve ship` | Confirm the separate post-publication merge/release/deploy gate |
 | `/team create shop` | Create explicitly; does not join automatically |
 | `/team delete shop` | Permanently delete an inactive team after confirmation |
 | `/team rename-team shop store` | Rename a team after every member is offline |
@@ -115,6 +139,16 @@ operations require confirmation. Tab completion covers subcommands, discovered
 teams, and teammates.
 
 ## Agent tools
+
+Managed lead tools:
+
+- `team_plan` — submit up to eight persistent roles and a validated acyclic work plan.
+- `team_plan_status` — fresh progress, dependencies, blockers, approvals, agents, and
+  bounded structured activity; never wakes a model.
+- `team_gate_report` — record factual publication/ship evidence after the matching
+  user approval; cannot grant approval itself.
+
+Manual mailbox tools:
 
 - `team_members` — discover other teammates and their status; excludes this session.
 - `team_send` — send `{ to, kind: "request" | "note", subject, body }`.
@@ -149,6 +183,14 @@ asks your agent to chase the teammate or tell you what is blocked. See
 
 ## Safety
 
+- Managed peers get full coding tools, including unrestricted Bash, inside their
+  dedicated worktree. A worktree is collision isolation, **not an OS sandbox**.
+- Managed integration uses full hexadecimal commit ids and never pushes. Existing
+  dirty user checkouts prevent automatic activation rather than being absorbed.
+- Activity journals contain bounded, sanitized events—not chain-of-thought or raw
+  conversation logs—and rotate at 512 KB.
+- `publish-pr` and `ship` are durable, separate gates. Only an interactive user
+  confirmation can grant them; a model tool can only report evidence after a grant.
 - **This is not a sandbox or an authorization system.** Agents and processes under
   the same OS user already have filesystem access. Prompt-level rules are not a
   hard guarantee against a model that ignores them. Do not place untrusted agents
@@ -167,6 +209,10 @@ asks your agent to chase the teammate or tell you what is blocked. See
 
 | Limit | Value |
 | --- | --- |
+| Managed peers | 8 per objective |
+| Managed peer turn | 30 minutes, then abort/retry/reassign |
+| Corrective verification cycles | 2 before surfacing a blocker |
+| Structured activity journal | 512 KB current + one rotation; 200 events maximum per read |
 | Automatic peer turns before reception pauses | 5 by default, then `/team resume`; set `PI_TEAM_AUTO_TURNS` to change it (`0` removes the cap) |
 | Messages in one automatically linked conversation | 8 non-result |
 | Unsettled deliveries per member | 50 slots, one reserved per outstanding request |

@@ -8,6 +8,8 @@ export type GitResult = { stdout: string; stderr: string };
 export type GitRunner = (cwd: string, args: readonly string[]) => Promise<GitResult>;
 export type RepositoryState = { root: string; branch: string; head: string; clean: boolean };
 export type ManagedWorktree = { alias: string; path: string; branch: string; head: string; reused: boolean };
+const ALLOCATION_ATTEMPTS = 100;
+
 export type IntegrationResult = { ok: true; head: string; applied: string[] } | { ok: false; commit: string; error: string; applied: string[] };
 
 function reason(error: unknown): string {
@@ -74,18 +76,27 @@ export class WorktreeManager {
   }
 
   async allocate(repoRoot: string, team: string, alias: string, baseRef: string): Promise<ManagedWorktree> {
-    const root = resolve(repoRoot);
+    const root = resolve(await realpath(repoRoot));
+    await this.prepare(team);
+    return this.allocateAttempt(root, team, alias, baseRef, ALLOCATION_ATTEMPTS);
+  }
+
+  private async allocateAttempt(root: string, team: string, alias: string, baseRef: string, remaining: number): Promise<ManagedWorktree> {
+    if (remaining < 1) throw new Error('Managed worktree allocation is busy; try again.');
     const worktreePath = this.path(team, alias);
     const branch = this.branch(team, alias);
-    await this.prepare(team);
-    return withFileLock(this.lockPath(team), async () => {
+    try { return await withFileLock(this.lockPath(team), async () => {
       if (!await missing(worktreePath)) {
         const info = await lstat(worktreePath);
         if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe managed worktree path: ${worktreePath}`);
         const actualRoot = resolve((await this.git(worktreePath, ['rev-parse', '--show-toplevel'])).stdout);
         const actualBranch = (await this.git(worktreePath, ['branch', '--show-current'])).stdout;
-        if (resolve(await realpath(actualRoot)) !== resolve(await realpath(worktreePath)) || actualBranch !== branch) {
-          throw new Error(`Managed worktree mismatch for ${alias}; manual recovery required`);
+        const expectedCommonRaw = (await this.git(root, ['rev-parse', '--git-common-dir'])).stdout;
+        const expectedCommon = resolve(await realpath(resolve(root, expectedCommonRaw)));
+        const actualCommonRaw = (await this.git(worktreePath, ['rev-parse', '--git-common-dir'])).stdout;
+        const actualCommon = resolve(await realpath(resolve(worktreePath, actualCommonRaw)));
+        if (resolve(await realpath(actualRoot)) !== resolve(await realpath(worktreePath)) || actualBranch !== branch || actualCommon !== expectedCommon) {
+          throw new Error(`Managed worktree mismatch for ${alias}; it must belong to ${root}. Manual recovery required`);
         }
         return { alias, path: worktreePath, branch, head: (await this.git(worktreePath, ['rev-parse', 'HEAD'])).stdout, reused: true };
       }
@@ -95,7 +106,11 @@ export class WorktreeManager {
         ? ['worktree', 'add', worktreePath, branch]
         : ['worktree', 'add', '-b', branch, worktreePath, baseRef]);
       return { alias, path: worktreePath, branch, head: (await this.git(worktreePath, ['rev-parse', 'HEAD'])).stdout, reused: false };
-    });
+    }); } catch (error) {
+      if ((error as { code?: string }).code !== 'RECORD_LOCKED') throw error;
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 5 + Math.random() * 25));
+      return this.allocateAttempt(root, team, alias, baseRef, remaining - 1);
+    }
   }
 
   async dirty(worktree: Pick<ManagedWorktree, 'path'>): Promise<boolean> {
@@ -114,6 +129,7 @@ export class WorktreeManager {
   async integrate(worktree: Pick<ManagedWorktree, 'path'>, commits: string[]): Promise<IntegrationResult> {
     const applied: string[] = [];
     for (const commit of [...new Set(commits)]) {
+      if (!/^[a-f0-9]{40,64}$/.test(commit)) return { ok: false, commit, error: 'Integration accepts only full hexadecimal commit ids.', applied };
       if (await succeeds(this.git(worktree.path, ['merge-base', '--is-ancestor', commit, 'HEAD']))) continue;
       try {
         await this.git(worktree.path, ['cherry-pick', commit]);

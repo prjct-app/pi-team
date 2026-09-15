@@ -68,8 +68,9 @@ test('keyboard and mouse provide equivalent agent activity navigation', () => {
     assert.match(component.render(90).join('\n'), /› ◐ waiting · frontend/);
     assert.match(component.render(90).join('\n'), /Waiting for contract/);
     component.handleInput('\x1b[A');
-    component.render(90);
-    const click = component.handleMouse({ type: 'click', button: 'left', x: 4, y: 7, screenX: 4, screenY: 7, width: 90, height: 30, shift: false, alt: false, ctrl: false });
+    const agentLines = component.render(90);
+    const frontendRow = agentLines.findIndex(line => line.includes('frontend'));
+    const click = component.handleMouse({ type: 'click', button: 'left', x: 4, y: frontendRow, screenX: 4, screenY: 7, width: 90, height: 30, shift: false, alt: false, ctrl: false });
     assert.deepEqual(click, { handled: true, focus: true, render: true });
     assert.match(component.render(90).join('\n'), /› ◐ waiting · frontend/);
     assert.ok(renders.count >= 4);
@@ -88,5 +89,39 @@ test('panel rejects stale snapshots and widget summarizes blockers and approvals
     component.setSnapshot(snapshot(2));
     assert.match(component.render(72).join('\n'), /blocked.*2\/3 \(67%\)/);
     assert.equal(teamWidget(newer), 'release-team · ◆ blocked · 67% · 1/2 active · 1 blocked · approval required');
+  } finally { component.dispose(); }
+});
+
+
+test('manual same-revision snapshots cannot be clobbered by an older in-flight refresh', async () => {
+  const pending: { resolve?: (value: TeamViewSnapshot) => void } = {};
+  const load = () => new Promise<TeamViewSnapshot>(resolve => { pending.resolve = resolve; });
+  const component = new TeamPlanPanel({ tui: { requestRender() {} }, theme, initial: snapshot(1), load, done() {}, refreshMs: 5 });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 15));
+    const newer = snapshot(1);
+    newer.goal.status = 'blocked';
+    component.setSnapshot(newer);
+    pending.resolve?.(snapshot(1));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.match(component.render(70).join('\n'), /blocked/);
+  } finally { component.dispose(); }
+});
+
+test('activity follow mode can pause, browse older events, and return to the tail', () => {
+  const value = snapshot();
+  value.activity.backend = Array.from({ length: 15 }, (_, index) => ({ seq: index + 1, at: index + 1, alias: 'backend', kind: 'progress' as const, summary: `Update ${index + 1}` }));
+  const component = new TeamPlanPanel({ tui: { requestRender() {} }, theme, initial: value, load: async () => value, done() {}, refreshMs: 100_000 });
+  try {
+    component.handleInput('2');
+    assert.match(component.render(90).join('\n'), /Update 15/);
+    component.handleInput('\x1b[5~');
+    const older = component.render(90).join('\n');
+    assert.match(older, /follow off/);
+    assert.doesNotMatch(older, /Update 15/);
+    component.handleInput('f');
+    const tail = component.render(90).join('\n');
+    assert.match(tail, /follow on/);
+    assert.match(tail, /Update 15/);
   } finally { component.dispose(); }
 });

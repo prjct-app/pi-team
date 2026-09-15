@@ -71,3 +71,38 @@ test('an existing symlink is never accepted as a managed worktree', async (t) =>
   const manager = new WorktreeManager(store);
   await assert.rejects(manager.allocate(root, 'release', 'backend', 'develop'), /Unsafe managed worktree path/);
 });
+
+test('a reused worktree must belong to the requested repository, not merely share its branch name', async (t) => {
+  const first = await repository(t);
+  const secondRoot = await mkdtemp(join(tmpdir(), 'pi-team-foreign-repo-'));
+  t.after(() => rm(secondRoot, { recursive: true, force: true }));
+  await exec('git', ['init', '-b', 'develop', secondRoot]);
+  await exec('git', ['-C', secondRoot, 'config', 'user.email', 'tests@example.com']);
+  await exec('git', ['-C', secondRoot, 'config', 'user.name', 'Pi Team Tests']);
+  await writeFile(join(secondRoot, 'README.md'), 'foreign\n');
+  await exec('git', ['-C', secondRoot, 'add', 'README.md']);
+  await exec('git', ['-C', secondRoot, 'commit', '-m', 'chore: foreign']);
+  const manager = new WorktreeManager(first.store);
+  await manager.allocate(first.root, 'release', 'backend', 'develop');
+  await assert.rejects(manager.allocate(secondRoot, 'release', 'backend', 'develop'), /must belong to/);
+});
+
+test('concurrent allocation converges on one reusable worktree', async (t) => {
+  const { root, store } = await repository(t);
+  const manager = new WorktreeManager(store);
+  const results = await Promise.all([
+    manager.allocate(root, 'release', 'backend', 'develop'),
+    manager.allocate(root, 'release', 'backend', 'develop'),
+  ]);
+  assert.equal(results.filter(result => result.reused).length, 1);
+  assert.equal(new Set(results.map(result => result.path)).size, 1);
+});
+
+test('integration rejects non-SHA revision syntax before invoking cherry-pick', async (t) => {
+  const { root, store } = await repository(t);
+  const manager = new WorktreeManager(store);
+  const integration = await manager.allocate(root, 'release', 'integration', 'develop');
+  const result = await manager.integrate(integration, ['HEAD~1']);
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.error, /full hexadecimal commit ids/);
+});

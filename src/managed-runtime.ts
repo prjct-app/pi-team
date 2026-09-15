@@ -10,6 +10,7 @@ export type PeerSession = {
   readonly sessionFile?: string;
   readonly messages: ReadonlyArray<unknown>;
   prompt(text: string, options: { source: 'extension'; expandPromptTemplates: false }): Promise<void>;
+  abort(): Promise<void>;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   setSessionName(name: string): void;
   dispose(): void;
@@ -29,7 +30,7 @@ export type RuntimeActivity = (alias: string, event: { kind: 'lifecycle' | 'tool
 
 type LiveSession = { session: PeerSession; unsubscribe: () => void; tracker: { workItemId: string } };
 
-type RuntimeOptions = {
+export type RuntimeOptions = {
   team: string;
   worktrees: Pick<WorktreeManager, 'allocate' | 'integrate' | 'commit' | 'git'>;
   model?: Model<any>;
@@ -39,6 +40,7 @@ type RuntimeOptions = {
   activity?: RuntimeActivity;
   sessionOpened?: (alias: string, sessionFile: string | undefined) => Promise<void> | void;
   now?: () => number;
+  runTimeoutMs?: number;
 };
 
 async function exists(path: string | undefined): Promise<boolean> {
@@ -77,6 +79,18 @@ function assistantResult(messages: ReadonlyArray<unknown>): { text: string; stop
     ? [(part as { text: string }).text]
     : []).join('\n');
   return { text, ...(typeof found?.stopReason === 'string' ? { stopReason: found.stopReason } : {}) };
+}
+
+async function boundedTurn(session: PeerSession, prompt: string, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolvePromise, reject) => {
+    const timer = setTimeout(() => {
+      void session.abort().catch(() => {}).finally(() => reject(new Error(`Managed peer exceeded the ${timeoutMs} ms execution limit`)));
+    }, timeoutMs);
+    void session.prompt(prompt, { source: 'extension', expandPromptTemplates: false }).then(
+      () => { clearTimeout(timer); resolvePromise(); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
 function taskPrompt(team: string, plan: ManagedPlan, item: WorkItem, agent: ManagedAgentState): string {
@@ -123,9 +137,14 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
   }
 
   private async peer(plan: ManagedPlan, item: WorkItem, agent: ManagedAgentState): Promise<ExecutionResult> {
+    if (item.kind === 'corrective') {
+      const commits = plan.workItems.filter(candidate => candidate.status === 'completed' && candidate.commit && !['integration', 'verification'].includes(candidate.kind)).map(candidate => candidate.commit!);
+      const prepared = await this.options.worktrees.integrate({ path: agent.worktree }, commits);
+      if (!prepared.ok) return { outcome: 'failed', summary: `Could not prepare corrective worktree at ${prepared.commit}: ${prepared.error}` };
+    }
     const session = await this.ensure(agent, item.id);
     const before = (await this.options.worktrees.git(agent.worktree, ['rev-parse', 'HEAD'])).stdout;
-    await session.prompt(taskPrompt(this.options.team, plan, item, agent), { source: 'extension', expandPromptTemplates: false });
+    await boundedTurn(session, taskPrompt(this.options.team, plan, item, agent), this.options.runTimeoutMs ?? 30 * 60_000);
     const assistant = assistantResult(session.messages);
     const committed = await this.options.worktrees.commit({ path: agent.worktree }, `${item.kind === 'review' ? 'fix' : 'feat'}: ${item.title}`);
     const changed = committed.head !== before;
@@ -161,7 +180,7 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
 
   dispose(): void {
     this.closed = true;
-    for (const live of this.sessions.values()) { live.unsubscribe(); live.session.dispose(); }
+    for (const live of this.sessions.values()) { live.unsubscribe(); void live.session.abort().catch(() => {}); live.session.dispose(); }
     this.sessions.clear();
   }
 }

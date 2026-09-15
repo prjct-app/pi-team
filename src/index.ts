@@ -7,9 +7,10 @@ import { Type } from 'typebox';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Mailbox, type Membership, type Message, type Outgoing, type Result, type Snapshot } from './mailbox.ts';
 import { publishActiveRoot } from './agents.ts';
+import { ManagedCoordinator } from './managed.ts';
 
-const COMMANDS = ['create', 'delete', 'rename-team', 'join', 'list', 'members', 'remove', 'rename-member', 'status', 'wake', 'send', 'note', 'inbox', 'pause', 'resume', 'leave'];
-const HELP = '/team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
+const COMMANDS = ['plan', 'approve', 'create', 'delete', 'rename-team', 'join', 'list', 'members', 'remove', 'rename-member', 'status', 'wake', 'send', 'note', 'inbox', 'pause', 'resume', 'leave'];
+const HELP = '/team plan | /team approve <publish-pr|ship> | /team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
 const TEAM_CHECK_IN = `Team check-in: report what you are working on, what remains, blockers, and your next concrete step.
 If you are waiting on another teammate, use team_send to ask them directly for the missing input.
 Do not stay idle: complete any pending work you can finish within the current user's authorization and project rules.
@@ -181,11 +182,12 @@ function autoTurnsFromEnv(): number | undefined {
   return Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?: number; reviewMs?: number; agingMs?: number; autoTurns?: number } = {}): void {
+export function installTeam(pi: ExtensionAPI, options: { root?: string; managedRoot?: string; pollMs?: number; reviewMs?: number; agingMs?: number; autoTurns?: number } = {}): void {
   const box = new Mailbox(options.root ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'teams'));
   const reviewMs = options.reviewMs ?? 60_000;
   const agingMs = options.agingMs ?? 300_000;
   const autoTurns = options.autoTurns ?? autoTurnsFromEnv() ?? 5;
+  const managed = new ManagedCoordinator(pi, { root: options.managedRoot });
   const slot = { current: INITIAL };
   const get = (): Session => slot.current;
   // Optional process-wide bridge: pi-subagents reads this provider only when
@@ -453,11 +455,12 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   });
 
   pi.registerCommand('team', {
-    description: 'Local team messaging and lifecycle management',
+    description: 'Managed Team Plan, approvals, and manual mailbox lifecycle',
     getArgumentCompletions(prefix) {
       const parts = prefix.split(/\s+/);
       const values = parts.length === 1 ? COMMANDS
         : parts.length === 2 && ['join', 'delete', 'rename-team'].includes(parts[0]) ? get().teamNames
+        : parts.length === 2 && parts[0] === 'approve' ? ['publish-pr', 'ship']
         : parts.length === 2 && ['send', 'note', 'remove', 'rename-member'].includes(parts[0]) ? get().aliases
         : [];
       const stem = parts.slice(0, -1).join(' ');
@@ -466,6 +469,16 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     handler: async (args, context) => {
       if (context.mode !== 'tui') { context.ui.notify('Team membership is interactive-terminal only.', 'warning'); return; }
       set(() => ({ ctx: context }));
+      const [managedCommand, managedArgument, ...managedRest] = args.trim().split(/\s+/);
+      if (managedCommand === 'plan') { await managed.open(context); return; }
+      if (managedCommand === 'approve') {
+        if (!['publish-pr', 'ship'].includes(managedArgument ?? '') || managedRest.length) {
+          context.ui.notify('Usage: /team approve <publish-pr|ship>', 'warning'); return;
+        }
+        try { await managed.approve(managedArgument as 'publish-pr' | 'ship', context); }
+        catch (error) { notice(error); }
+        return;
+      }
       await queue(async () => {
         const [command, a, b, ...rest] = args.trim().split(/\s+/);
         const ui = context.ui;
@@ -619,6 +632,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   pi.on('session_start', async (event, context) => {
     if (context.mode !== 'tui') return;
     set(() => ({ ctx: context, closed: false }));
+    await managed.restore(event, context);
     const teamNames = await box.teams();
     set(() => ({ teamNames }));
     // Only restore this exact session, never a fork's copied membership.
@@ -636,14 +650,17 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
   });
   pi.on('before_agent_start', event => {
     const { member } = get();
-    return member ? { systemPrompt: `${event.systemPrompt}\n\n${PEER_RULES}\nJoined team: ${member.team}; your alias: ${member.alias}.` } : undefined;
+    const systemPrompt = managed.systemPrompt(event.systemPrompt);
+    return member
+      ? { systemPrompt: `${systemPrompt}\n\n${PEER_RULES}\nJoined team: ${member.team}; your alias: ${member.alias}.` }
+      : systemPrompt !== event.systemPrompt ? { systemPrompt } : undefined;
   });
   pi.on('ui_prompt_start', () => { set(session => ({ prompts: session.prompts + 1 })); });
   pi.on('ui_prompt_end', () => {
     set(session => ({ prompts: Math.max(0, session.prompts - 1) }));
     enqueueTick();
   });
-  pi.on('input', event => {
+  pi.on('input', async (event, context) => {
     if (event.source !== 'interactive') return;
     set(() => ({ budget: 0 }));
     // The cap pauses to demand a person; one just typed. An explicit /team
@@ -657,6 +674,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
       set(() => ({ userTakeover: true, paused: true, pauseReason: 'user' }));
       persist();
     }
+    if (!get().member) await managed.activate(event.text, context);
   });
   pi.on('tool_result', (event, context) => {
     const { active, userTakeover } = get();
@@ -704,6 +722,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; pollMs?:
     enqueueTick();
   });
   pi.on('session_shutdown', async () => {
+    managed.shutdown();
     set(() => ({ closed: true }));
     stop();
     await queue(async () => {

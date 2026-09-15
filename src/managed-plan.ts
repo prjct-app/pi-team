@@ -50,8 +50,8 @@ export function assertManagedPlan(plan: unknown): asserts plan is ManagedPlan {
     throw new Error('Managed team agent state must reference a known work item');
   }
   if (typed.approvals.some(approval => approval.status === 'required'
-    ? approval.actor !== undefined || approval.decidedAt !== undefined
-    : approval.actor !== 'user' || approval.decidedAt === undefined)) {
+    ? approval.actor !== undefined || approval.decidedAt !== undefined || approval.evidence !== undefined
+    : approval.actor !== 'user' || approval.decidedAt === undefined || (approval.status === 'consumed' && !approval.evidence))) {
     throw new Error('Managed team approvals can only be decided by the user and must record the decision time');
   }
   const activePeerItems = typed.workItems.filter(item => item.status === 'active' && !['integration', 'verification'].includes(item.kind));

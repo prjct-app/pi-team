@@ -12,7 +12,7 @@ export const TeamBlueprintSchema = Type.Object({
   agents: Type.Array(Type.Object({
     alias,
     role: Type.String({ minLength: 1, maxLength: 80 }),
-  }, { additionalProperties: false }), { minItems: 1, maxItems: 6 }),
+  }, { additionalProperties: false }), { minItems: 1, maxItems: 8 }),
   workItems: Type.Array(Type.Object({
     id,
     title: Type.String({ minLength: 1, maxLength: 160 }),
@@ -32,8 +32,8 @@ export type TeamBlueprint = {
   }[];
 };
 
-export function managedTeamName(leadSession: string): string {
-  return `team-${createHash('sha256').update(leadSession).digest('hex').slice(0, 12)}`;
+export function managedTeamName(leadSession: string, objective = ''): string {
+  return `team-${createHash('sha256').update(`${leadSession}\0${objective}`).digest('hex').slice(0, 12)}`;
 }
 
 export function createPlanningPlan(team: string, leadSession: string, objective: string, repository: RepositoryState, now = Date.now()): ManagedPlan {

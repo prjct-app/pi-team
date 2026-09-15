@@ -6,7 +6,7 @@ import { test, type TestContext } from 'node:test';
 import { ActivityJournal } from '../src/activity.ts';
 import { ManagedPlanStore } from '../src/managed-plan.ts';
 import type { ManagedPlan } from '../src/managed-schema.ts';
-import { ManagedScheduler, type ExecutionResult, type SchedulerRuntime } from '../src/scheduler.ts';
+import { ManagedScheduler, scheduleReady, type ExecutionResult, type SchedulerRuntime } from '../src/scheduler.ts';
 
 function plan(root: string): ManagedPlan {
   const now = 1;
@@ -115,6 +115,83 @@ test('startup recovers an interrupted active assignment and re-runs it', async (
   await scheduler.idle();
   const snapshot = await store.snapshot('demo');
   assert.equal(snapshot.workItems[0].status, 'completed');
-  assert.equal(snapshot.workItems[0].attempts, 2);
+  assert.equal(snapshot.workItems[0].attempts, 1, 'An interrupted attempt is retried without exceeding the budget');
   assert.equal(snapshot.agents[0].restarts, 1);
+});
+
+
+test('a retry is reassigned to an idle healthy peer while partial work remains isolated', async (t) => {
+  const calls: (string | undefined)[] = [];
+  const runtime: SchedulerRuntime = {
+    now: () => Date.now(),
+    async execute(_plan, _item, agent) {
+      calls.push(agent?.alias);
+      return calls.length === 1 ? { outcome: 'failed', summary: 'Backend session failed' } : { outcome: 'completed', summary: 'Frontend recovered the task' };
+    },
+  };
+  const { store, scheduler } = await setup(t, runtime, value => ({ ...value, workItems: value.workItems.filter(item => item.id === 'api') }));
+  await scheduler.start();
+  await scheduler.idle();
+  const snapshot = await store.snapshot('demo');
+  assert.deepEqual(calls, ['backend', 'frontend']);
+  assert.equal(snapshot.workItems[0].status, 'completed');
+  assert.equal(snapshot.workItems[0].assignee, 'frontend');
+  assert.equal(snapshot.agents.find(agent => agent.alias === 'backend')?.restarts, 1);
+});
+
+test('a failed integrated verification schedules bounded corrective work and re-verifies automatically', async (t) => {
+  const calls: string[] = [];
+  const runtime: SchedulerRuntime = {
+    now: () => Date.now(),
+    async execute(_plan, item) {
+      calls.push(item.id);
+      if (item.id === 'verification') return { outcome: 'failed', summary: 'Tests failed: expected 200, received 500', tests: ['npm run test (failed)'] };
+      return { outcome: 'completed', summary: `${item.id} done`, ...(!['verification-1'].includes(item.id) ? { commit: item.id.padEnd(40, 'c') } : {}), ...(item.id === 'verification-1' ? { tests: ['npm run test'] } : {}) };
+    },
+  };
+  const { store, scheduler } = await setup(t, runtime, value => ({
+    ...value,
+    workItems: value.workItems.filter(item => ['api', 'integrate', 'verify'].includes(item.id)).map(item =>
+      item.id === 'integrate' ? { ...item, dependsOn: ['api'] }
+        : item.id === 'verify' ? { ...item, id: 'verification', dependsOn: ['integrate'], maxAttempts: 1 } : item),
+  }));
+  await scheduler.start();
+  await scheduler.idle();
+  const snapshot = await store.snapshot('demo');
+  assert.deepEqual(calls, ['api', 'integrate', 'verification', 'corrective-1', 'integration-1', 'verification-1']);
+  assert.equal(snapshot.workItems.find(item => item.id === 'verification')?.status, 'cancelled');
+  assert.equal(snapshot.workItems.find(item => item.id === 'corrective-1')?.kind, 'corrective');
+  assert.equal(snapshot.workItems.find(item => item.id === 'verification-1')?.status, 'completed');
+  assert.equal(snapshot.goal.status, 'ready');
+  assert.equal(snapshot.approvals[0]?.kind, 'publish-pr');
+});
+
+
+test('recovery at maxAttempts is idempotent and never exceeds the schema budget', async (t) => {
+  const gate: { resolve?: () => void } = {};
+  const runtime: SchedulerRuntime = {
+    now: () => Date.now(),
+    execute: async () => { await new Promise<void>(resolve => { gate.resolve = resolve; }); return { outcome: 'completed', summary: 'Recovered' }; },
+  };
+  const { store, scheduler } = await setup(t, runtime, value => ({
+    ...value,
+    workItems: value.workItems.filter(item => item.id === 'api').map(item => ({ ...item, status: 'active', attempts: 2, maxAttempts: 2 })),
+    agents: value.agents.filter(agent => agent.alias === 'backend').map(agent => ({ ...agent, status: 'active', workItemId: 'api' })),
+  }));
+  await Promise.all([scheduler.start(), scheduler.start()]);
+  const active = await store.snapshot('demo');
+  assert.equal(active.workItems[0].attempts, 2);
+  assert.equal(active.agents[0].restarts, 1);
+  gate.resolve?.();
+  await scheduler.idle();
+  assert.equal((await store.snapshot('demo')).workItems[0].status, 'completed');
+});
+
+test('unrelated launches cannot clear an existing blocked goal', () => {
+  const value = plan('/repo');
+  value.goal.status = 'blocked';
+  value.blockers.push({ id: 'open', workItemId: 'api', kind: 'environment', summary: 'Missing service', detail: '', status: 'open', createdAt: 1 });
+  const scheduled = scheduleReady(value, 20);
+  assert.ok(scheduled.launches.length > 0);
+  assert.equal(scheduled.plan.goal.status, 'blocked');
 });

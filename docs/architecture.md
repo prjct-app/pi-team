@@ -3,6 +3,46 @@
 How pi-team stores state, coordinates concurrent sessions, and recovers from
 failure. For everyday use see the [README](../README.md).
 
+## Managed orchestration
+
+A normal action-oriented implementation prompt in a clean Git checkout creates a
+managed goal under `~/.pi/agent/managed-teams/<team>/plan.json`. The team id hashes
+the lead session and objective. The plan record uses the same revisioned,
+content-hashed compare-and-swap store as mailboxes, but remains separate from manual
+team lifecycle operations.
+
+The lead submits a TypeBox-validated DAG through `team_plan`. Each declared peer is
+allocated a private worktree and `pi-team/<team>/<alias>` branch from the exact base
+commit. Reuse checks both the expected branch and Git common directory, so a foreign
+repository cannot masquerade as a prior worktree. Worktree allocation is locked and
+retryable; existing partial work is preserved rather than reset or deleted.
+
+Managed peers are programmatic `AgentSession` instances created through the public Pi
+0.85.1 SDK. Sessions persist to Pi journals and are reused across work items. Their
+working directory is always their assigned worktree. Tool events become sanitized,
+sequence-ordered activity records; assistant thinking and raw tool arguments do not.
+A 30-minute health limit aborts a stuck turn. Failed work retries within its budget,
+prefers reassignment to an idle peer, and preserves the failed peer's worktree.
+
+The scheduler serializes transitions but launches independent ready nodes concurrently.
+Dependencies unlock from durable state, without model polling or `/team wake` turns.
+On lead reload, an active assignment is requeued without consuming another attempt,
+and the persistent peer session is reopened from its saved session file. Completed
+peer commits are cherry-picked by full SHA into a dedicated integration worktree.
+Standard package verification follows; failures create at most two corrective DAG
+cycles before becoming a visible blocker.
+
+A ready or blocked transition wakes the lead once with structured coordinator state so
+the lead can provide one consolidated result. Publication is not automatic. An
+interactive `publish-pr` approval is required before push/PR work, and successful
+publication creates a distinct `ship` approval for merge/release/deploy. Model and peer
+messages cannot grant either gate.
+
+The Team Plan overlay reads the same durable snapshot as the scheduler. It exposes the
+work DAG, critical path, progress, agent state, open blockers, approval gates, and a
+bounded live activity stream. Mouse member selection and keyboard navigation are
+behaviorally equivalent; no chain-of-thought is stored or rendered.
+
 ## Storage model
 
 Each team is one JSON record at `~/.pi/agent/teams/<team>/state.json`, honouring

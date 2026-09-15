@@ -31,6 +31,7 @@ class FakeSession implements PeerSession {
     this.listener?.({ type: 'tool_execution_start', toolCallId: 'call', toolName: 'edit', args: { path: 'src/api.ts' } });
     this.messages.push({ role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: 'not exported' }, { type: 'text', text: `Completed turn ${this.prompts.length}` }] });
   }
+  async abort(): Promise<void> {}
   subscribe(listener: (event: AgentSessionEvent) => void): () => void { this.listener = listener; return () => { this.listener = undefined; }; }
   setSessionName(name: string): void { this.names.push(name); }
   dispose(): void { this.disposed = true; }
@@ -104,4 +105,38 @@ test('integration and verification are local coordinator operations, not peer pr
   const verified = await runtime.execute({ ...data.plan, workItems: [data.item, { ...integration, status: 'completed', commit: 'c'.repeat(40) }, verification] }, verification);
   assert.deepEqual(scripts, ['check', 'test']);
   assert.deepEqual(verified.tests, ['npm run check', 'npm run test']);
+});
+
+test('corrective peers receive completed peer commits without replaying integration commits', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-corrective-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const data = fixture(root);
+  const session = new FakeSession();
+  const trees = worktrees(root);
+  const completedApi = { ...data.item, status: 'completed' as const, commit: 'd'.repeat(40) };
+  const completedReview: WorkItem = { ...completedApi, id: 'review', title: 'Review', kind: 'review', commit: 'e'.repeat(40) };
+  const completedIntegration: WorkItem = { ...completedApi, id: 'integration', title: 'Integrate', kind: 'integration', commit: 'f'.repeat(40) };
+  const corrective: WorkItem = { ...data.item, id: 'corrective-1', title: 'Correct tests', kind: 'corrective', dependsOn: ['integration'], status: 'active', attempts: 1 };
+  const runtime = new ManagedExecutionRuntime({ team: 'demo', worktrees: trees.value, createSession: async () => session });
+  const result = await runtime.execute({ ...data.plan, workItems: [completedApi, completedReview, completedIntegration, corrective] }, corrective, { ...data.agent, workItemId: corrective.id });
+  assert.equal(result.outcome, 'completed');
+  assert.deepEqual(trees.calls.integrated, ['d'.repeat(40), 'e'.repeat(40)]);
+  runtime.dispose();
+});
+
+
+test('hung peer turns are aborted and surfaced for scheduler recovery', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const data = fixture(root);
+  const aborted = { value: false };
+  const hanging: PeerSession = {
+    sessionFile: '/sessions/hanging.jsonl', messages: [], setSessionName() {}, subscribe: () => () => {}, dispose() {},
+    prompt: async () => new Promise<void>(() => {}),
+    abort: async () => { aborted.value = true; },
+  };
+  const runtime = new ManagedExecutionRuntime({ team: 'demo', worktrees: worktrees(root).value, createSession: async () => hanging, runTimeoutMs: 10 });
+  await assert.rejects(runtime.execute(data.plan, data.item, data.agent), /execution limit/);
+  assert.equal(aborted.value, true);
+  runtime.dispose();
 });

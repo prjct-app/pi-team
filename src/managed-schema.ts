@@ -55,6 +55,7 @@ export const ApprovalSchema = Type.Object({
   requestedAt: timestamp,
   decidedAt: Type.Optional(timestamp),
   actor: Type.Optional(Type.Literal('user')),
+  evidence: Type.Optional(Type.String({ minLength: 1, maxLength: 2_048 })),
 }, { additionalProperties: false });
 
 export const AgentStateSchema = Type.Object({
@@ -108,7 +109,7 @@ export type Blocker = {
 };
 export type Approval = {
   id: string; kind: 'publish-pr' | 'ship'; status: 'required' | 'granted' | 'denied' | 'consumed';
-  summary: string; requestedAt: number; decidedAt?: number; actor?: 'user';
+  summary: string; requestedAt: number; decidedAt?: number; actor?: 'user'; evidence?: string;
 };
 export type ManagedAgentState = {
   alias: string; role: string; status: 'starting' | 'idle' | 'active' | 'blocked' | 'waiting' | 'recovering' | 'offline' | 'completed' | 'failed';
