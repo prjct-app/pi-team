@@ -127,7 +127,7 @@ export class TeamPlanPanel implements Component, Focusable {
     else if (matchesKey(data, 'down')) { this.tab = 'agents'; this.select(1); }
     else if (matchesKey(data, 'pageUp')) { this.tab = 'agents'; this.follow = false; this.activityOffset += 5; }
     else if (matchesKey(data, 'pageDown')) { this.tab = 'agents'; this.activityOffset = Math.max(0, this.activityOffset - 5); this.follow = this.activityOffset === 0; }
-    else if (matchesKey(data, 'f')) { this.follow = !this.follow; if (this.follow) this.activityOffset = 0; }
+    else if (matchesKey(data, 'f')) { this.follow = true; this.activityOffset = 0; }
     else return;
     this.options.tui.requestRender();
   }

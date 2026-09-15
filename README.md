@@ -27,7 +27,7 @@ same extension from both GitHub and npm: Pi treats those as different packages.
 
 ## Quickstart
 
-Start Pi in a clean Git checkout and describe an implementation objective normally:
+Start Pi in a Git checkout and describe an implementation objective normally:
 
 ```text
 Implement account settings with API validation, UI states, tests, and documentation.
