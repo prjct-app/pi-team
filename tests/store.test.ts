@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { envelope, publish, readRecord, readRecordCached, sha256, writeAtomic } from '../src/store.ts';
+import { envelope, publish, readRecord, readRecordCached, sha256, withFileLock, writeAtomic } from '../src/store.ts';
 
 const MAX = 1_000_000;
 
@@ -69,6 +69,19 @@ test('the stat-validated cache follows external writes to the same path', async 
   const payload = '{"count":7}';
   await writeAtomic(path, `{"schemaVersion":1,"revision":3,"contentHash":"${sha256(payload)}","payload":${payload}}`, 'light');
   assert.deepEqual((await readRecordCached(path, envelope, MAX))?.payload, { count: 7 });
+});
+
+test('a custom short stale window reclaims a dead lock', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-store-stale-ms-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lockPath = join(root, 'custom.lock');
+  await writeFile(lockPath, '', { flag: 'wx', mode: 0o600 });
+  const recent = new Date(Date.now() - 200);
+  await utimes(lockPath, recent, recent);
+  await assert.rejects(withFileLock(lockPath, async () => 'default'), /Another writer/);
+  const reclaimed = await withFileLock(lockPath, async () => 'ok', { staleMs: 50 });
+  assert.equal(reclaimed, 'ok');
+  assert.equal(await stat(lockPath).catch(() => undefined), undefined, 'The lock is released');
 });
 
 test('a lock abandoned by a crashed writer is broken after going stale', async (t) => {

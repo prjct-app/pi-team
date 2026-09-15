@@ -14,8 +14,9 @@ team lifecycle operations.
 The lead submits a TypeBox-validated DAG through `team_plan`. Each declared peer is
 allocated a private worktree and `pi-team/<team>/<alias>` branch from the exact base
 commit. Reuse checks both the expected branch and Git common directory, so a foreign
-repository cannot masquerade as a prior worktree. Worktree allocation is locked and
-retryable; existing partial work is preserved rather than reset or deleted.
+repository cannot masquerade as a prior worktree. Worktree allocation holds a
+process-aware lock across `git worktree add` and is retryable; existing partial work
+is preserved rather than reset or deleted.
 
 Managed peers are real interactive Pi processes hosted in persistent `tmux` sessions.
 The runtime creates one terminal per declared alias in that alias's worktree, launches Pi
@@ -107,8 +108,9 @@ sessions from both sides of the lock migration remain alive during a rolling
 reload; without it, two versions could publish the same next revision and lose
 a claim. The compatibility lock is opened without creating its parent, so a
 stale writer still cannot resurrect a deleted team. A conflict fails fast and
-the caller retries against a fresh read. A lock abandoned by a crashed writer
-is reclaimed after ten seconds.
+the caller retries against a fresh read. A publication lock abandoned by a crashed
+writer is reclaimed after ten seconds. Worktree allocation writes the holder pid and
+does not steal while that process is alive.
 
 Because every publication renames a **new inode** into place, readers can safely
 cache a parsed record keyed on `(inode, size, mtime)`: a write by any process

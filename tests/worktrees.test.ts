@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { promisify } from 'node:util';
 import { childEnv } from '../src/process-env.ts';
-import { discoverRepository, runGit, WorktreeManager } from '../src/worktrees.ts';
+import { discoverRepository, runGit, WorktreeManager, type GitRunner } from '../src/worktrees.ts';
 
 const exec = promisify(execFile);
 
@@ -17,6 +17,7 @@ async function repository(t: TestContext) {
   await exec('git', ['init', '-b', 'develop', root]);
   await exec('git', ['-C', root, 'config', 'user.email', 'tests@example.com']);
   await exec('git', ['-C', root, 'config', 'user.name', 'Pi Team Tests']);
+  await exec('git', ['-C', root, 'config', 'core.excludesFile', '']);
   await writeFile(join(root, 'README.md'), 'base\n');
   await exec('git', ['-C', root, 'add', 'README.md']);
   await exec('git', ['-C', root, 'commit', '-m', 'chore: initial']);
@@ -148,4 +149,54 @@ test('coordinator git subprocesses omit GIT_DIR, tokens, and NODE_OPTIONS from t
   } finally {
     restore();
   }
+  });
+
+test('worktree allocation does not steal a live lock after the publication stale window', async (t) => {
+  const { root, store } = await repository(t);
+  let releaseGate = () => {};
+  const gate = new Promise<void>(resolve => { releaseGate = resolve; });
+  const git: GitRunner = async (cwd, args) => {
+    if (args[0] === 'worktree' && args[1] === 'add') await gate;
+    return runGit(cwd, args);
+  };
+  const pending = new WorktreeManager(store, git).allocate(root, 'release', 'backend', 'develop');
+  t.after(async () => { releaseGate(); await pending.catch(() => {}); });
+  const lockPath = join(store, '.locks', 'release-worktrees.lock');
+  const deadline = Date.now() + 5_000;
+  const waitForPid = async (): Promise<string> => {
+    const raw = await readFile(lockPath, 'utf8').catch(() => '');
+    if (raw.trim() === String(process.pid)) return raw;
+    if (Date.now() > deadline) throw new Error('allocation lock did not record a live pid');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    return waitForPid();
+  };
+  assert.match(await waitForPid(), new RegExp(`^${process.pid}\\s*$`));
+  const aged = new Date(Date.now() - 11 * 60 * 1000);
+  await utimes(lockPath, aged, aged);
+  const rival = new WorktreeManager(store);
+  await assert.rejects(rival.allocate(root, 'release', 'frontend', 'develop'), /busy/);
+  assert.equal(await stat(join(store, 'release', 'worktrees', 'frontend')).catch(() => undefined), undefined);
+  releaseGate();
+  const first = await pending;
+  assert.equal(first.reused, false);
+  const second = await rival.allocate(root, 'release', 'frontend', 'develop');
+  assert.equal(second.reused, false);
+});
+
+test('commit refuses a staged .env or id_ed25519 and leaves HEAD unchanged', async (t) => {
+  const { root, store } = await repository(t);
+  const manager = new WorktreeManager(store);
+  const backend = await manager.allocate(root, 'release', 'backend', 'develop');
+  const head = (await runGit(backend.path, ['rev-parse', 'HEAD'])).stdout;
+
+  await writeFile(join(backend.path, '.env'), 'SECRET=1\n');
+  await assert.rejects(manager.commit(backend, 'feat: add env'), /secret path: \.env/);
+  assert.equal((await runGit(backend.path, ['rev-parse', 'HEAD'])).stdout, head);
+  assert.equal((await runGit(backend.path, ['diff', '--cached', '--name-only'])).stdout, '');
+
+  await rm(join(backend.path, '.env'));
+  await writeFile(join(backend.path, 'id_ed25519'), 'private-key\n');
+  await assert.rejects(manager.commit(backend, 'feat: add key'), /secret path: id_ed25519/);
+  assert.equal((await runGit(backend.path, ['rev-parse', 'HEAD'])).stdout, head);
+  assert.equal((await runGit(backend.path, ['diff', '--cached', '--name-only'])).stdout, '');
 });

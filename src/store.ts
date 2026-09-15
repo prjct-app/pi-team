@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, mkdir, open, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { link, mkdir, open, readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 /**
@@ -135,6 +135,29 @@ export async function writeAtomic(path: string, text: string, durability: Durabi
 
 const locked = () => Object.assign(new Error('Another writer holds this record.'), { code: 'RECORD_LOCKED' });
 
+/** Optional lock policy. Mailbox callers keep the boolean third argument. */
+export type FileLockOptions = {
+  createParent?: boolean;
+  /** Age after which an empty or pid-less lock may be stolen. Defaults to 10s. */
+  staleMs?: number;
+  /** Write this process pid and refuse to steal while that pid is alive. */
+  livePid?: boolean;
+};
+
+function resolveLockOptions(createParent: boolean | FileLockOptions = true): {
+  createParent: boolean;
+  staleMs: number;
+  livePid: boolean;
+} {
+  return typeof createParent === 'boolean'
+    ? { createParent, staleMs: STALE_LOCK_MS, livePid: false }
+    : {
+        createParent: createParent.createParent ?? true,
+        staleMs: createParent.staleMs ?? STALE_LOCK_MS,
+        livePid: createParent.livePid === true,
+      };
+}
+
 /** Resolve to `undefined` when the lock is already held; other errors propagate. */
 async function tryLock(lockPath: string) {
   try { return await open(lockPath, 'wx', 0o600); }
@@ -144,21 +167,65 @@ async function tryLock(lockPath: string) {
   }
 }
 
-async function acquireLock(lockPath: string) {
+async function claimLock(lockPath: string, livePid: boolean) {
   const held = await tryLock(lockPath);
-  if (held) return held;
-  // A crashed writer can leave its lock behind; publication takes
-  // microseconds, so a lock older than STALE_LOCK_MS is safe to break.
+  if (!held || !livePid) return held;
+  try {
+    await held.writeFile(`${process.pid}\n`, 'utf8');
+    return held;
+  } catch (error) {
+    await held.close().catch(() => {});
+    await unlink(lockPath).catch(() => {});
+    throw error;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+async function lockHolderPid(lockPath: string): Promise<number | undefined> {
+  const match = /^([1-9][0-9]{0,9})\s*$/.exec(await readFile(lockPath, 'utf8').catch(() => ''));
+  return match ? Number(match[1]) : undefined;
+}
+
+async function stealable(lockPath: string, staleMs: number, livePid: boolean): Promise<boolean> {
   const info = await stat(lockPath).catch(() => undefined);
-  if (!info || Date.now() - info.mtimeMs <= STALE_LOCK_MS) throw locked();
+  // A missing lock is not stealable: another waiter may have already claimed
+  // the path. Callers fail with RECORD_LOCKED and retry, as they did before.
+  if (!info) return false;
+  if (livePid) {
+    const pid = await lockHolderPid(lockPath);
+    if (pid !== undefined) return !pidAlive(pid);
+  }
+  return Date.now() - info.mtimeMs > staleMs;
+}
+
+async function acquireLock(lockPath: string, staleMs: number, livePid: boolean) {
+  const held = await claimLock(lockPath, livePid);
+  if (held) return held;
+  // Publications take microseconds, so the default 10s steal is safe and
+  // mailbox lock files stay empty for rolling-upgrade compatibility.
+  // Worktree allocation passes livePid plus a long staleMs fallback.
+  if (!await stealable(lockPath, staleMs, livePid)) throw locked();
   await unlink(lockPath).catch(() => {});
-  return await tryLock(lockPath) ?? (() => { throw locked(); })();
+  return await claimLock(lockPath, livePid) ?? (() => { throw locked(); })();
 }
 
 /** Run one storage operation while holding a caller-chosen private lock. */
-export async function withFileLock<T>(lockPath: string, action: () => Promise<T>, createParent = true): Promise<T> {
-  if (createParent) await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
-  const lock = await acquireLock(lockPath);
+export async function withFileLock<T>(
+  lockPath: string,
+  action: () => Promise<T>,
+  createParent: boolean | FileLockOptions = true,
+): Promise<T> {
+  const options = resolveLockOptions(createParent);
+  if (options.createParent) await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
+  const lock = await acquireLock(lockPath, options.staleMs, options.livePid);
   try { return await action(); }
   finally {
     await lock.close();
