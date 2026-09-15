@@ -184,7 +184,9 @@ asks your agent to chase the teammate or tell you what is blocked. See
 ## Safety
 
 - Managed peers get full coding tools, including unrestricted Bash, inside their
-  dedicated worktree. A worktree is collision isolation, **not an OS sandbox**.
+  dedicated worktree. Their resource loader disables all ambient extensions, preventing
+  recursive pi-team startup and unrelated extension side effects. A worktree is collision
+  isolation, **not an OS sandbox**.
 - Managed integration uses full hexadecimal commit ids and never pushes. Existing
   user-checkout changes remain untouched and are excluded from the peers' exact-HEAD base.
 - Activity journals contain bounded, sanitized events—not chain-of-thought or raw

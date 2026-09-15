@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { access, readFile } from 'node:fs/promises';
 import type { Model } from '@earendil-works/pi-ai/compat';
-import { createAgentSession, SessionManager, type AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, type AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { ManagedAgentState, ManagedPlan, WorkItem } from './managed-schema.ts';
 import type { ExecutionResult, SchedulerRuntime } from './scheduler.ts';
 import { WorktreeManager } from './worktrees.ts';
@@ -49,15 +49,24 @@ async function exists(path: string | undefined): Promise<boolean> {
   catch { return false; }
 }
 
+export async function createIsolatedResourceLoader(cwd: string, agentDir = getAgentDir()): Promise<DefaultResourceLoader> {
+  const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true });
+  await loader.reload();
+  return loader;
+}
+
 const defaultSessionFactory: PeerSessionFactory = async options => {
   const sessionManager = await exists(options.sessionFile)
     ? SessionManager.open(options.sessionFile!)
     : SessionManager.create(options.cwd);
+  const agentDir = options.agentDir ?? getAgentDir();
+  const resourceLoader = await createIsolatedResourceLoader(options.cwd, agentDir);
   const { session } = await createAgentSession({
     cwd: options.cwd,
-    agentDir: options.agentDir,
+    agentDir,
     model: options.model,
     tools: options.tools,
+    resourceLoader,
     sessionManager,
   });
   return session;

@@ -18,7 +18,9 @@ repository cannot masquerade as a prior worktree. Worktree allocation is locked 
 retryable; existing partial work is preserved rather than reset or deleted.
 
 Managed peers are programmatic `AgentSession` instances created through the public Pi
-0.85.1 SDK. Sessions persist to Pi journals and are reused across work items. Their
+0.85.1 SDK. Their explicit `DefaultResourceLoader` sets `noExtensions: true`, so ambient
+global and project extensions cannot recursively start teams or add side effects. Sessions
+persist to Pi journals and are reused across work items. Their
 working directory is always their assigned worktree. Tool events become sanitized,
 sequence-ordered activity records; assistant thinking and raw tool arguments do not.
 A 30-minute health limit aborts a stuck turn. Failed work retries within its budget,

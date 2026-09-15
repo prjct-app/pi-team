@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
-import { ManagedExecutionRuntime, type PeerSession, type PeerSessionOptions } from '../src/managed-runtime.ts';
+import { createIsolatedResourceLoader, ManagedExecutionRuntime, type PeerSession, type PeerSessionOptions } from '../src/managed-runtime.ts';
 import type { ManagedAgentState, ManagedPlan, WorkItem } from '../src/managed-schema.ts';
 import type { IntegrationResult, ManagedWorktree } from '../src/worktrees.ts';
 
@@ -139,4 +139,17 @@ test('hung peer turns are aborted and surfaced for scheduler recovery', async (t
   await assert.rejects(runtime.execute(data.plan, data.item, data.agent), /execution limit/);
   assert.equal(aborted.value, true);
   runtime.dispose();
+});
+
+test('managed peer resource loading disables ambient extensions', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-extensions-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const agentDir = join(root, 'agent');
+  const cwd = join(root, 'repo');
+  await mkdir(join(agentDir, 'extensions'), { recursive: true });
+  await mkdir(join(cwd, '.pi', 'extensions'), { recursive: true });
+  await writeFile(join(agentDir, 'extensions', 'recursive.ts'), 'export default () => { throw new Error("ambient extension loaded"); };');
+  await writeFile(join(cwd, '.pi', 'extensions', 'project.ts'), 'export default () => { throw new Error("project extension loaded"); };');
+  const loader = await createIsolatedResourceLoader(cwd, agentDir);
+  assert.deepEqual(loader.getExtensions().extensions, []);
 });
