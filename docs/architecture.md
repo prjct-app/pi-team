@@ -6,7 +6,7 @@ failure. For everyday use see the [README](../README.md).
 ## Managed orchestration
 
 A normal action-oriented implementation prompt in a clean Git checkout creates a
-managed goal under `~/.pi/agent/managed-teams/<team>/plan.json`. The team id hashes
+managed goal under `~/.pi/agent/managed-teams/<team>/plan.json`. The team id combines a readable objective slug with a short hash of
 the lead session and objective. The plan record uses the same revisioned,
 content-hashed compare-and-swap store as mailboxes, but remains separate from manual
 team lifecycle operations.
@@ -17,13 +17,20 @@ commit. Reuse checks both the expected branch and Git common directory, so a for
 repository cannot masquerade as a prior worktree. Worktree allocation is locked and
 retryable; existing partial work is preserved rather than reset or deleted.
 
-Managed peers are programmatic `AgentSession` instances created through the public Pi
-0.85.1 SDK. Their explicit `DefaultResourceLoader` sets `noExtensions: true`, so ambient
-global and project extensions cannot recursively start teams or add side effects. Sessions
-persist to Pi journals and are reused across work items. Their
-working directory is always their assigned worktree. Tool events become sanitized,
-sequence-ordered activity records; assistant thinking and raw tool arguments do not.
-A 30-minute health limit aborts a stuck turn. Failed work retries within its budget,
+Managed peers are real interactive Pi processes hosted in persistent `tmux` sessions.
+The runtime creates one terminal per declared alias in that alias's worktree, launches Pi
+with only pi-team explicitly enabled, and joins the team's durable mailbox. This prevents
+ambient extension recursion while keeping the normal Pi TUI available. The scheduler sends
+DAG assignments through mailbox requests and consumes their correlated structured results.
+Peers can use `team_send` and `team_status` to exchange plan-scoped questions and dependency
+handoffs; those messages remain durable and are mirrored into the managed trace. The user
+can open any live peer with `/team terminal`, observe its actual Pi session, and steer or
+interrupt it directly. Closing the viewing window does not stop the tmux-hosted peer.
+
+Terminal session storage, worktree, branch, mailbox membership, tool activity, peer messages,
+commits, tests, results, blockers, and user control actions remain attributable to the plan
+and alias. Assistant private reasoning and raw credentials are never copied into the plan.
+A 30-minute health limit interrupts a stuck turn. Failed work retries within its budget,
 prefers reassignment to an idle peer, and preserves the failed peer's worktree.
 
 The scheduler serializes transitions but launches independent ready nodes concurrently.
@@ -40,10 +47,36 @@ interactive `publish-pr` approval is required before push/PR work, and successfu
 publication creates a distinct `ship` approval for merge/release/deploy. Model and peer
 messages cannot grant either gate.
 
-The Team Plan overlay reads the same durable snapshot as the scheduler. It exposes the
-work DAG, critical path, progress, agent state, open blockers, approval gates, and a
-bounded live activity stream. Mouse member selection and keyboard navigation are
-behaviorally equivalent; no chain-of-thought is stored or rendered.
+The Team Plan uses Pi 0.85.1's documented native widget pattern—the same interaction
+pattern used by pi-plan, without importing or depending on that package. A live component
+is registered with `ctx.ui.setWidget` and `placement: "belowEditor"` as soon as managed
+work starts. It renders the current work queue, progress, blockers, and approvals. The
+`/team plan` detailed component uses non-overlay `ctx.ui.custom`, so it temporarily replaces
+the editor instead of floating over the transcript. It exposes the complete DAG, critical
+path, agent state, approval gates, and bounded activity stream. Mouse member selection and
+keyboard navigation are behaviorally equivalent where fullscreen mouse input is available;
+no chain-of-thought is stored or rendered. When a repository has multiple durable plans,
+`/team plan` first shows a native plan chooser with objective, status, and peer states; the
+chosen plan remains live-refreshing even when another lead session owns it. `/team control`
+records user-attributed pause, resume, cancellation, retry, reassignment, and unblock events.
+Cancelling an active item sends Ctrl-C to its tmux terminal and fences any late result.
+
+A lead session owns one factory plan at a time. The plan can receive additional work
+batches through normal action prompts or `/team <objective>`. `team_plan_add` appends each
+validated batch, its integration node, and its verification node to the existing DAG. The
+same persistent peers process multiple tasks sequentially per session, while distinct idle
+peers execute ready nodes concurrently. Local integration nodes are serialized across
+batches. This keeps one observable plan below the editor rather than stacking independent
+panels. Before new-team creation, the coordinator searches plans whose canonical
+`repoRoot` matches the current repository. The user chooses an existing team or explicitly
+creates another one. Cross-session assignments are queued in the selected plan and delivered
+to its owning lead; monitoring never transfers scheduler ownership.
+
+While managed work is active, pi-team blocks the lead's built-in repository read/write and
+shell tools. The lead can converse, plan, inspect structured team status, and delegate, but
+repository research and implementation belong to peers. A granted publication or ship gate
+allows the non-mutating repository tools and shell needed for that explicit action; direct
+lead `edit` and `write` remain blocked.
 
 ## Storage model
 
@@ -204,7 +237,10 @@ Directory watchers provide prompt delivery; polling every two seconds recovers
 missed notifications. Both run only for joined interactive sessions and close on
 shutdown. Transient storage errors are reported but never pause reception.
 
-## Design decisions and non-goals
+## Manual mailbox design decisions and non-goals
+
+Managed teams use the terminal runtime described above. The following choices apply only
+to manually created mailbox teams.
 
 | Concern | Choice |
 | --- | --- |

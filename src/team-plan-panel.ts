@@ -65,6 +65,34 @@ export function teamWidget(snapshot: TeamViewSnapshot): string {
   return `${safe(snapshot.team, 48)} · ${STATUS_SYMBOL[snapshot.goal.status] ?? '·'} ${snapshot.goal.status} · ${snapshot.progress.percent}% · ${active}/${snapshot.agents.length} active${blocker}${approval}`;
 }
 
+function progressBar(completed: number, total: number, width = 8): string {
+  const filled = total ? Math.round(Math.max(0, Math.min(1, completed / total)) * width) : 0;
+  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`;
+}
+
+export function teamWidgetLines(snapshot: TeamViewSnapshot, theme: Theme, width: number): string[] {
+  const priority: Record<WorkItem['status'], number> = {
+    active: 0, verifying: 0, blocked: 1, ready: 2, waiting: 3, queued: 4, failed: 5, completed: 6, cancelled: 7,
+  };
+  const ordered = snapshot.workItems.map((item, index) => ({ item, index }))
+    .sort((left, right) => priority[left.item.status] - priority[right.item.status] || left.index - right.index)
+    .map(value => value.item);
+  const visible = ordered.slice(0, 8);
+  const remaining = Math.max(0, ordered.length - visible.length);
+  const critical = new Set(snapshot.criticalPath);
+  const title = theme.fg('accent', theme.bold(`▸ ${safe(snapshot.team, 48)} ${snapshot.progress.completed}/${snapshot.progress.total}`));
+  const barColor = snapshot.goal.status === 'completed' ? 'success' : snapshot.goal.status === 'blocked' || snapshot.goal.status === 'failed' ? 'error' : 'accent';
+  const lines = [
+    `${title} ${theme.fg(barColor, progressBar(snapshot.progress.completed, snapshot.progress.total))}${theme.fg('muted', ` ${snapshot.progress.percent}% · ${snapshot.goal.status}`)}`,
+    ...visible.map(item => workLabel(item, theme, critical)),
+    ...(remaining ? [theme.fg('dim', `  … ${remaining} more work item${remaining === 1 ? '' : 's'}`)] : []),
+    ...snapshot.blockers.slice(0, 2).map(blocker => `${theme.fg('error', '◆ blocker')} · ${safe(blocker.summary, 240)}`),
+    ...snapshot.approvals.slice(0, 2).map(approval => `${theme.fg('warning', '◆ approval')} · ${approval.kind} · ${safe(approval.summary, 240)}`),
+    theme.fg('dim', '/team plan · activity and details'),
+  ];
+  return lines.map(line => truncateToWidth(line, width));
+}
+
 export class TeamPlanPanel implements Component, Focusable {
   focused = true;
   private snapshot: TeamViewSnapshot;
@@ -183,7 +211,13 @@ export class TeamPlanPanel implements Component, Focusable {
     const approvals = this.snapshot.approvals.length
       ? this.snapshot.approvals.map(approval => `${this.options.theme.fg('warning', '◆ approval')} · ${approval.kind} · ${safe(approval.summary, 240)}`)
       : [this.options.theme.fg('dim', 'No approval is currently required.')];
-    return [this.options.theme.bold('Blockers'), ...blockers, '', this.options.theme.bold('Human gates'), ...approvals];
+    const requests = (this.snapshot.requests ?? []).slice(-8).map(request => `${request.status === 'queued' ? '○' : '✓'} ${request.status} · ${safe(request.objective, 160)}`);
+    const controls = (this.snapshot.controls ?? []).slice(-8).map(control => `${new Date(control.at).toLocaleTimeString()} · user ${control.action}${control.target ? ` · ${safe(control.target, 128)}` : ''}`);
+    const communications = (this.snapshot.communications ?? []).slice(-12).map(message => `${new Date(message.at).toLocaleTimeString()} · ${safe(message.from, 48)} → ${safe(message.to, 48)} · ${safe(message.message, 1_000)}`);
+    return [this.options.theme.bold('Blockers'), ...blockers, '', this.options.theme.bold('Human gates'), ...approvals,
+      '', this.options.theme.bold('Peer communication'), ...(communications.length ? communications : [this.options.theme.fg('dim', 'No structured peer messages.')]),
+      '', this.options.theme.bold('Cross-session requests'), ...(requests.length ? requests : [this.options.theme.fg('dim', 'No queued team requests.')]),
+      '', this.options.theme.bold('User control audit'), ...(controls.length ? controls : [this.options.theme.fg('dim', 'No control actions recorded.')])];
   }
 
   render(width: number): string[] {
@@ -193,13 +227,13 @@ export class TeamPlanPanel implements Component, Focusable {
     const inner = width - 2;
     const tabs = TABS.map(tab => tab === this.tab ? theme.fg('accent', theme.bold(`[${tab}]`)) : theme.fg('dim', tab)).join('  ');
     const header = [
-      `${theme.bold('Team Plan')} · ${statusText(theme, this.snapshot.goal.status)} · ${this.snapshot.progress.completed}/${this.snapshot.progress.total} (${this.snapshot.progress.percent}%)`,
+      `${theme.bold('Team Plan')} · ${theme.fg('accent', safe(this.snapshot.team, 48))} · ${statusText(theme, this.snapshot.goal.status)} · ${this.snapshot.progress.completed}/${this.snapshot.progress.total} (${this.snapshot.progress.percent}%)`,
       safe(this.snapshot.goal.objective, 16_000),
       tabs,
       '',
     ];
     const body = this.tab === 'plan' ? this.planLines() : this.tab === 'agents' ? this.agentLines(header.length + 1) : this.blockerLines();
-    const footer = ['', theme.fg('dim', '1 plan · 2 agents · 3 blockers · ↑↓ select · PgUp/PgDn activity · f follow · Esc close')];
+    const footer = ['', theme.fg('dim', '1 plan · 2 agents · 3 trace/control · ↑↓ select · PgUp/PgDn activity · f follow · /team control · Esc close')];
     const content = [...header, ...body, ...footer].map(line => `│${fit(line, inner)}│`);
     return [`╭${'─'.repeat(inner)}╮`, ...content, `╰${'─'.repeat(inner)}╯`];
   }

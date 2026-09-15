@@ -14,7 +14,7 @@ and connect terminals yourself. Both modes keep coordination state on this machi
 
 ## Install
 
-Requires Pi installed separately and Node.js **22.19 or later**. Tested against
+Requires Pi and `tmux` installed separately, plus Node.js **22.19 or later**. Managed peers run in persistent, user-attachable `tmux` terminals. Tested against
 Pi **0.85.1**; newer versions are not yet verified. Independent community package.
 
 ```sh
@@ -43,13 +43,25 @@ managed mode explicitly when the request is exploratory or does not use an actio
 Unknown text after `/team` is treated as the objective; reserved command names such as
 `plan`, `status`, and `join` keep their documented behavior. For an action-oriented
 implementation prompt, pi-team creates a durable planning goal. The lead submits a
-bounded DAG through `team_plan`; up to eight persistent peer sessions then run in
+bounded DAG through `team_plan`; up to eight persistent Pi terminal sessions are created automatically and run in
 dedicated `pi-team/<team>/<alias>` branches and private worktrees. Integration and
 standard `check`, `test`, and `check:package` scripts run locally and automatically.
 
-The compact widget shows progress. Open `/team plan` for the live plan, dependencies,
-blockers, approvals, and clickable member activity. Arrow keys provide the same member
-navigation; Page Up/Page Down browse activity and `f` returns to follow mode.
+The live Team Plan appears automatically below the editor using Pi's native
+`setWidget(..., { placement: "belowEditor" })` API. It lists the current work items,
+progress, blockers, and approvals. `/team plan` temporarily replaces the editor with the
+detailed keyboard/mouse activity view; it is never rendered as a floating overlay.
+Arrow keys select peers, Page Up/Page Down browse activity, and `f` returns to follow mode.
+Use `/team terminal` to open the selected peer's real Pi terminal in Ghostty on macOS
+(or the system terminal launcher on Linux), and `/team control` to pause, cancel, retry,
+reassign, or unblock work.
+
+Before creating another managed team, pi-team scans durable plans for the current
+repository and asks which existing team should receive the objective. The chooser shows
+the human-readable plan name, objective, status, and every peer. Work sent to a team owned
+by another lead session is queued durably for that lead instead of silently creating a
+new opaque team. `/team plan` can monitor every plan in the repository without transferring
+ownership.
 
 Push and pull-request creation remain blocked at the `publish-pr` gate. Explicitly run
 `/team approve publish-pr` when the proposed local result is ready to publish. After
@@ -75,16 +87,25 @@ To coordinate terminals you opened yourself, create and join a mailbox explicitl
 A note is display-only; a request wakes the joined reviewer once idle and returns a
 correlated result. Installing alone never joins a manual mailbox.
 
-Supported on Linux and macOS with local disk storage. Network filesystems,
+Supported on Linux and macOS with `tmux` and local disk storage. Network filesystems,
 cross-machine messaging, and native Windows are not supported.
 
 ## Concepts
 
-A **managed team** belongs to one lead session and one Git objective. Its plan,
+A **managed team** belongs to one lead session, one repository, and one evolving factory plan. Its plan,
 agent states, blockers, approvals, and structured activity live under
-`~/.pi/agent/managed-teams/`. Each peer is an independent persistent Pi session with
+`~/.pi/agent/managed-teams/`. Each peer is an independent persistent Pi session running in its own attachable `tmux` terminal, with
 a dedicated branch, worktree, role, and current work item. The lead is the only human
-interface and never treats peer output as authorization.
+interface and never treats peer output as authorization. Repository tools are blocked in
+the lead while managed work is active: research, auditing, implementation, and review are
+delegated to peers. The lead remains available for normal conversation and status questions.
+
+Each lead session has one active **factory plan**, not a stack of unrelated plan widgets.
+That plan accepts multiple work batches over time. Send another action-oriented prompt—or
+explicitly `/team <more work>`—to append a batch. Existing peers keep their persistent
+sessions and process multiple queued tasks; different idle peers run ready tasks concurrently.
+The below-editor widget lists the current plan's work items, prioritizing active and blocked
+work, while `/team plan` exposes the full DAG and activity.
 
 A **manual team** is a named local mailbox. A session joins under an **alias**: an
 address, not a privileged role or automatic persona, and shared rather than private —
@@ -114,11 +135,22 @@ or requires the other, and pi-team behaves the same when pi-subagents is absent.
 
 ## Commands
 
+The normal managed workflow has one free-form entrypoint and four operational commands:
+
 | Command | Meaning |
 | --- | --- |
-| `/team plan` | Open the live managed Team Plan overlay |
+| `/team <objective>` | Start the factory or append another work batch |
+| `/team plan` | Choose and monitor any managed plan for this repository |
+| `/team terminal` | Choose a plan and open a real peer terminal |
+| `/team control` | Pause/resume a plan or cancel, retry, reassign, and unblock work |
 | `/team approve publish-pr` | Confirm the first human gate for push and pull-request creation |
 | `/team approve ship` | Confirm the separate post-publication merge/release/deploy gate |
+
+Legacy manual-mailbox commands remain accepted for compatibility but are intentionally
+omitted from top-level completion to keep the primary surface small:
+
+| Advanced manual command | Meaning |
+| --- | --- |
 | `/team create shop` | Create explicitly; does not join automatically |
 | `/team delete shop` | Permanently delete an inactive team after confirmation |
 | `/team rename-team shop store` | Rename a team after every member is offline |
@@ -143,14 +175,15 @@ rejoins it. Removing that alias instead settles every unresolved request involvi
 it; incoming requests produce an interrupted result so their requesters stop waiting.
 Renaming an alias rewrites its message addresses so queued work follows the new
 name. Team deletion and rename require every member to be offline, and destructive
-operations require confirmation. Tab completion covers subcommands, discovered
-teams, and teammates.
+operations require confirmation. Top-level completion shows only `plan`, `terminal`, `control`, and `approve`;
+a typed legacy verb can still complete discovered teams and teammates.
 
 ## Agent tools
 
 Managed lead tools:
 
 - `team_plan` — submit up to eight persistent roles and a validated acyclic work plan.
+- `team_plan_add` — append another dependency-aware work batch to the persistent peer fleet.
 - `team_plan_status` — fresh progress, dependencies, blockers, approvals, agents, and
   bounded structured activity; never wakes a model.
 - `team_gate_report` — record factual publication/ship evidence after the matching
@@ -163,8 +196,8 @@ Manual mailbox tools:
 - `team_status` — outstanding work: what you emitted and is unresolved, what is
   queued for you, results awaiting your review, and third-party team activity.
 
-Tools cannot create teams, join, resume reception, change permissions, or launch
-terminals; they require membership you established. Discovery results and recipient
+Manual mailbox tools cannot create teams, join, resume reception, change permissions, or launch
+terminals; they require membership you established. Managed orchestration creates its peer terminals itself. Discovery results and recipient
 autocomplete exclude the current session, and sending to yourself is rejected at
 the mailbox boundary. A request returns **queued**, never "task completed".
 

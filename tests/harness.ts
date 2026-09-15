@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { installTeam } from '../src/index.ts';
 
 type Handler = (event: any, ctx: any) => unknown;
-export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; autoTurns?: number; confirm?: boolean; cwd?: string; managedRoot?: string } = {}) {
+export function harness(root: string, session: string, saved: any[] = [], options: { reviewMs?: number; agingMs?: number; autoTurns?: number; confirm?: boolean; cwd?: string; managedRoot?: string; select?: (title: string, choices: string[]) => string | undefined } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, any>();
   const tools = new Map<string, any>();
@@ -12,8 +12,11 @@ export function harness(root: string, session: string, saved: any[] = [], option
   const userMessages: { content: unknown; options: unknown }[] = [];
   const notices: string[] = [];
   const confirmations: { title: string; message: string }[] = [];
+  const selections: { title: string; options: string[] }[] = [];
   const renderers = new Map<string, any>();
   const widgets = new Map<string, string[]>();
+  const widgetPlacements = new Map<string, unknown>();
+  const statuses = new Map<string, unknown>();
   let idle = true;
   let pending = false;
   let editor = '';
@@ -29,7 +32,11 @@ export function harness(root: string, session: string, saved: any[] = [], option
     sessionManager: { getSessionId: () => session, getBranch: () => entries },
     ui: { notify: (s: string) => notices.push(s), getEditorText: () => editor,
       confirm: async (title: string, message: string) => { confirmations.push({ title, message }); return confirmation; },
-      setWidget: (name: string, value: undefined | string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] })) => {
+      select: async (title: string, choices: string[]) => { selections.push({ title, options: choices }); return options.select?.(title, choices) ?? choices[0]; },
+      theme: { fg: (_color: string, text: string) => text },
+      setStatus: (name: string, value: unknown) => statuses.set(name, value),
+      setWidget: (name: string, value: undefined | string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] }), placement?: unknown) => {
+        widgetPlacements.set(name, placement);
         if (!value) widgets.delete(name);
         else if (Array.isArray(value)) widgets.set(name, value);
         else widgets.set(name, value({}, {}).render(200));
@@ -53,7 +60,7 @@ export function harness(root: string, session: string, saved: any[] = [], option
   } as unknown as ExtensionAPI;
   installTeam(api, { root, managedRoot: options.managedRoot ?? join(root, '.managed'), pollMs: 20, reviewMs: options.reviewMs ?? 60_000, agingMs: options.agingMs ?? 300_000, autoTurns: options.autoTurns });
   return {
-    received, userMessages, notices, confirmations, entries, tools, commands, renderers, widgets,
+    received, userMessages, notices, confirmations, selections, entries, tools, commands, renderers, widgets, widgetPlacements, statuses,
     async emit(name: string, event: unknown = {}) {
       const results: unknown[] = [];
       for (const handler of handlers.get(name) ?? []) results.push(await handler(event, context.current));

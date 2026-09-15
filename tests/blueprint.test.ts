@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyBlueprint, assertBlueprint, createPlanningPlan, managedTeamName, type TeamBlueprint } from '../src/blueprint.ts';
+import { applyBlueprint, applyWorkBatch, assertBlueprint, assertWorkBatch, createPlanningPlan, managedTeamName, type TeamBlueprint } from '../src/blueprint.ts';
 import { assertManagedPlan } from '../src/managed-plan.ts';
 import type { ManagedWorktree, RepositoryState } from '../src/worktrees.ts';
 
@@ -18,7 +18,7 @@ const worktrees: ManagedWorktree[] = [
 ];
 
 test('a normal objective becomes a deterministic durable planning goal', () => {
-  assert.match(managedTeamName('session-123'), /^team-[a-f0-9]{12}$/);
+  assert.match(managedTeamName('session-123', 'Fix production login bug'), /^team-fix-production-login-bug-[a-f0-9]{6}$/);
   assert.equal(managedTeamName('session-123'), managedTeamName('session-123'));
   const plan = createPlanningPlan('team-demo', 'session-123', 'Implement the feature', repository, 10);
   assert.equal(plan.goal.status, 'planning');
@@ -50,4 +50,17 @@ test('an adopted blueprint binds every peer to a worktree and appends integratio
   assert.equal(result.workItems.find(item => item.id === 'review')?.maxAttempts, 3);
   assert.doesNotThrow(() => assertManagedPlan(result));
   assert.throws(() => applyBlueprint(planning, blueprint, worktrees.slice(0, 1), 20), /allocated worktree/);
+});
+
+
+test('additional work batches reuse persistent peers and extend the existing DAG', () => {
+  const initial = applyBlueprint(createPlanningPlan('team-demo', 'lead', 'Build it', repository, 1), blueprint, worktrees, 2);
+  const batch = { workItems: [{ id: 'security', title: 'Audit security', detail: '', kind: 'review' as const, dependsOn: ['verification'], assignee: 'backend' }] };
+  assert.doesNotThrow(() => assertWorkBatch(initial, batch));
+  const extended = applyWorkBatch({ ...initial, approvals: [{ id: 'publish', kind: 'publish-pr', status: 'required', summary: 'Publish', requestedAt: 3 }] }, batch, 'batch1', 4);
+  assert.deepEqual(extended.workItems.slice(-3).map(item => item.id), ['security', 'integration-batch1', 'verification-batch1']);
+  assert.equal(extended.agents.length, initial.agents.length);
+  assert.deepEqual(extended.approvals, []);
+  assert.throws(() => assertWorkBatch(initial, { workItems: [{ ...batch.workItems[0], id: 'api' }] }), /unique across/);
+  assert.throws(() => assertWorkBatch(initial, { workItems: [{ ...batch.workItems[0], assignee: 'new-agent' }] }), /existing persistent peer/);
 });

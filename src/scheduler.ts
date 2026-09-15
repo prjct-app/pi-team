@@ -41,6 +41,7 @@ function eligibleAgent(item: WorkItem, agents: ManagedAgentState[], reserved: Se
 }
 
 export function scheduleReady(plan: ManagedPlan, now: number): { plan: ManagedPlan; launches: Launch[] } {
+  if (plan.goal.status === 'paused') return { plan, launches: [] };
   const normalized = plan.workItems.map(item => {
     const status = nextStatus(item, plan);
     const unavailable = item.assignee && plan.agents.some(agent => agent.alias === item.assignee && ['failed', 'offline'].includes(agent.status));
@@ -48,7 +49,7 @@ export function scheduleReady(plan: ManagedPlan, now: number): { plan: ManagedPl
   });
   const base = { ...plan, workItems: normalized };
   const reserved = new Set<string>();
-  const localReserved = { value: false };
+  const localReserved = { value: normalized.some(item => ['active', 'verifying'].includes(item.status) && ['integration', 'verification'].includes(item.kind)) };
   const launches = normalized.reduce<Launch[]>((all, item) => {
     if (item.status !== 'ready') return all;
     if (['integration', 'verification'].includes(item.kind)) {
@@ -168,6 +169,10 @@ export class ManagedScheduler {
 
   stop(): void { this.stopped = true; }
 
+  async kick(): Promise<void> {
+    await this.queue(() => this.pump());
+  }
+
   async recordActivity(alias: string, input: ActivityInput): Promise<void> {
     await this.queue(() => this.appendActivity(alias, input));
   }
@@ -206,12 +211,15 @@ export class ManagedScheduler {
     const now = this.runtime.now();
     const blockerId = randomUUID();
     const approvalId = randomUUID();
-    await this.store.update(this.team, plan => finishPlan(plan, launch.item.id, result, now, blockerId, approvalId));
-    if (launch.agent) await this.appendActivity(launch.agent.alias, {
-      kind: result.outcome === 'completed' ? 'result' : 'blocker',
-      summary: result.summary,
-      workItemId: launch.item.id,
-    });
+    const updated = await this.store.update(this.team, plan => finishPlan(plan, launch.item.id, result, now, blockerId, approvalId));
+    if (launch.agent) {
+      const cancelled = updated.payload.workItems.find(item => item.id === launch.item.id)?.status === 'cancelled';
+      await this.appendActivity(launch.agent.alias, {
+        kind: cancelled ? 'lifecycle' : result.outcome === 'completed' ? 'result' : 'blocker',
+        summary: cancelled ? `Stopped ${launch.item.title}; its late result was discarded` : result.summary,
+        workItemId: launch.item.id,
+      });
+    }
     await this.pump();
   }
 

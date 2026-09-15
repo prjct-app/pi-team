@@ -7,10 +7,11 @@ import { Type } from 'typebox';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Mailbox, type Membership, type Message, type Outgoing, type Result, type Snapshot } from './mailbox.ts';
 import { publishActiveRoot } from './agents.ts';
-import { ManagedCoordinator } from './managed.ts';
+import { ManagedCoordinator, shouldManagePrompt as shouldManagePromptText } from './managed.ts';
 
-const COMMANDS = ['plan', 'approve', 'create', 'delete', 'rename-team', 'join', 'list', 'members', 'remove', 'rename-member', 'status', 'wake', 'send', 'note', 'inbox', 'pause', 'resume', 'leave'];
-const HELP = '/team <objective> | /team plan | /team approve <publish-pr|ship> | /team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
+const COMMANDS = ['plan', 'terminal', 'control', 'approve', 'create', 'delete', 'rename-team', 'join', 'list', 'members', 'remove', 'rename-member', 'status', 'wake', 'send', 'note', 'inbox', 'pause', 'resume', 'leave'];
+const VISIBLE_COMMANDS = ['plan', 'terminal', 'control', 'approve'];
+const HELP = '/team <objective> | /team plan | /team terminal | /team control | /team approve <publish-pr|ship> | /team create <team> | delete <team> | rename-team <team> <new-team> | join <team> <alias> | list | members | remove <alias> | rename-member <alias> <new-alias> | status | wake [message] | send <alias> <text> | note <alias> <text> | inbox | pause | resume | leave';
 const TEAM_CHECK_IN = `Team check-in: report what you are working on, what remains, blockers, and your next concrete step.
 If you are waiting on another teammate, use team_send to ask them directly for the missing input.
 Do not stay idle: complete any pending work you can finish within the current user's authorization and project rules.
@@ -188,6 +189,13 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
   const agingMs = options.agingMs ?? 300_000;
   const autoTurns = options.autoTurns ?? autoTurnsFromEnv() ?? 5;
   const managed = new ManagedCoordinator(pi, { root: options.managedRoot });
+  const terminalPeer = process.env.PI_TEAM_MANAGED_TEAM && process.env.PI_TEAM_MANAGED_ALIAS
+    ? { team: process.env.PI_TEAM_MANAGED_TEAM, alias: process.env.PI_TEAM_MANAGED_ALIAS } : undefined;
+  pi.on('tool_call', async event => {
+    if (terminalPeer) await managed.recordTerminalActivity(terminalPeer.team, terminalPeer.alias, `Using ${event.toolName}`).catch(() => {});
+    const block = await managed.guardLeadTool(event.toolName);
+    return block ? { block: true, reason: block } : undefined;
+  });
   const slot = { current: INITIAL };
   const get = (): Session => slot.current;
   // Optional process-wide bridge: pi-subagents reads this provider only when
@@ -458,7 +466,7 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
     description: 'Start a managed objective, open Team Plan, approve gates, or manage a manual mailbox',
     getArgumentCompletions(prefix) {
       const parts = prefix.split(/\s+/);
-      const values = parts.length === 1 ? COMMANDS
+      const values = parts.length === 1 ? VISIBLE_COMMANDS
         : parts.length === 2 && ['join', 'delete', 'rename-team'].includes(parts[0]) ? get().teamNames
         : parts.length === 2 && parts[0] === 'approve' ? ['publish-pr', 'ship']
         : parts.length === 2 && ['send', 'note', 'remove', 'rename-member'].includes(parts[0]) ? get().aliases
@@ -471,6 +479,8 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
       set(() => ({ ctx: context }));
       const [managedCommand, managedArgument, ...managedRest] = args.trim().split(/\s+/);
       if (managedCommand === 'plan') { await managed.open(context); return; }
+      if (managedCommand === 'terminal') { try { await managed.openTerminal(context); } catch (error) { notice(error); } return; }
+      if (managedCommand === 'control') { try { await managed.control(context); } catch (error) { notice(error); } return; }
       if (managedCommand === 'approve') {
         if (!['publish-pr', 'ship'].includes(managedArgument ?? '') || managedRest.length) {
           context.ui.notify('Usage: /team approve <publish-pr|ship>', 'warning'); return;
@@ -481,11 +491,13 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
       }
       if (managedCommand && !COMMANDS.includes(managedCommand)) {
         if (get().member) { context.ui.notify('Leave the manual mailbox before starting a managed objective.', 'warning'); return; }
-        if (!managed.acceptsNewObjective()) { context.ui.notify('A managed objective is already active. Open /team plan to inspect it.', 'warning'); return; }
         const objective = args.trim();
-        await managed.activate(objective, context, true);
-        if (!managed.isActive()) { context.ui.notify('Managed team could not start. Run this command inside a Git repository.', 'warning'); return; }
-        pi.sendUserMessage(objective, { expandPromptTemplates: false });
+        try {
+          const action = await managed.routeObjective(objective, context, true);
+          if (action === 'handled') return;
+          if (!managed.isActive()) { context.ui.notify('Managed team could not start. Run this command inside a Git repository.', 'warning'); return; }
+          pi.sendUserMessage(objective, { ...(context.isIdle() ? {} : { deliverAs: 'followUp' as const }), expandPromptTemplates: false });
+        } catch (error) { notice(error); }
         return;
       }
       await queue(async () => {
@@ -684,7 +696,11 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
       set(() => ({ userTakeover: true, paused: true, pauseReason: 'user' }));
       persist();
     }
-    if (!get().member) await managed.activate(event.text, context);
+    if (!get().member && shouldManagePromptText(event.text)) {
+      try { return { action: await managed.routeObjective(event.text, context) }; }
+      catch (error) { notice(error); return { action: 'handled' }; }
+    }
+    return { action: 'continue' };
   });
   pi.on('tool_result', (event, context) => {
     const { active, userTakeover } = get();
