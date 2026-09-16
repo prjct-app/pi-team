@@ -78,7 +78,7 @@ export class ReceiptStore {
         return;
       }
       this.assertStoredReceipt(current, receipt.teamId, receipt.recipientId, receipt.messageId);
-      if (current.status === receipt.status && current.at === receipt.at) return;
+      if (current.status === receipt.status) return;
       if (!transitions[current.status].includes(receipt.status)) {
         throw Object.assign(new Error(`Invalid receipt transition: ${current.status} → ${receipt.status}.`), { code: 'INVALID_TRANSITION' });
       }

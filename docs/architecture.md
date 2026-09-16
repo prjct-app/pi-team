@@ -90,8 +90,8 @@ lead `edit` and `write` remain blocked.
 
 ## Team v2 core (staged)
 
-The replacement storage core is implemented under `src/domain/` and `src/storage/`, but
-is deliberately not connected to the extension until the messaging and membership phases
+The replacement core is implemented under `src/domain/`, `src/storage/`, and `src/runtime/`,
+but is deliberately not connected to the extension until the supervisor and command phases
 land. It uses `${PRJCT_HOME:-~/.prjct}/pi-team/` and separates team metadata, members,
 inbox envelopes, receipts, and leases into independent bounded records. The active v1
 runtime described below continues to use its existing paths during this transition.
@@ -110,6 +110,25 @@ resource leases require both a random token and monotonically increasing generat
 expired holder cannot renew or release its replacement. Releasing a lease retains a bounded
 tombstone at the same lease ID, preserving its generation for the next acquisition. Startup legacy detection performs
 one `lstat` of the old root only; it never traverses, migrates, or deletes legacy records.
+
+The staged runtime adds token-fenced joins, leaves, and presence; persistent offline inboxes;
+correlated requests, explicit replies, and durable cancellation; delivery and advisory
+resource claims; and a reconciler for expired presence, messages, receipts, and interrupted
+claims. Messages sent
+to an online generation are rejected after that generation is replaced, while messages sent
+to an offline durable address remain available to its next owner. A delivery marker is
+published before a body is returned to the model or injected, so a crash after injection is
+never automatically replayed. This deliberately prefers an interrupted request over duplicate
+side effects. Sender cancellation wins the request lock over a late reply, and closing code
+can cancel all outgoing requests before releasing membership. Automatic delivery rejects
+external peers and requires an explicit human-enabled flag for supervised peers.
+
+A single compact `team` model tool is prepared for dynamic activation. It supports only
+`status`, `peers`, `inbox`, `claim`, `read`, `release`, `send`, and `reply`; `claim` and
+`release` coordinate advisory resource IDs while message delivery claims stay internal.
+Lifecycle, migration, purge, and process controls remain human-only. The tool and its system-prompt
+rules are active only while a session owns a membership. The staged controller is not yet
+registered by the active v1 extension.
 
 ## Storage model (v1, active)
 

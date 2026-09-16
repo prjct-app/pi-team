@@ -175,6 +175,15 @@ export class InboxStore {
     return message;
   }
 
+  async readClaimed(teamId: string, recipientId: string, messageId: string): Promise<Envelope | undefined> {
+    await this.prepare();
+    await this.requireTeam(teamId);
+    if (!await this.prepareRecipient(teamId, recipientId, false)) return undefined;
+    const message = await readJson(this.paths.claimedMessage(teamId, recipientId, messageId), assertEnvelope, MESSAGE_MAX_BYTES);
+    if (message) this.assertStoredMessage(message, teamId, recipientId, messageId);
+    return message;
+  }
+
   async listPending(teamId: string, recipientId: string, limit = 50, cursor?: string): Promise<InboxPage> {
     assertTeamId(teamId);
     assertEntityId(recipientId, 'recipient ID');
@@ -187,6 +196,23 @@ export class InboxStore {
     const remaining = cursor === undefined ? ids : ids.filter(id => id > cursor);
     const pageIds = remaining.slice(0, limit);
     const records = await Promise.all(pageIds.map(id => this.readPending(teamId, recipientId, id)));
+    const messages = records.filter((message): message is Envelope => message !== undefined);
+    const nextCursor = remaining.length > limit ? pageIds.at(-1) : undefined;
+    return { messages, ...(nextCursor ? { nextCursor } : {}) };
+  }
+
+  async listClaimed(teamId: string, recipientId: string, limit = 50, cursor?: string): Promise<InboxPage> {
+    assertTeamId(teamId);
+    assertEntityId(recipientId, 'recipient ID');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Inbox page limit must be between 1 and 100.');
+    if (cursor !== undefined) assertEntityId(cursor, 'inbox cursor');
+    await this.prepare();
+    await this.requireTeam(teamId);
+    if (!await this.prepareRecipient(teamId, recipientId, false)) return { messages: [] };
+    const ids = await jsonFileNames(this.paths.claimed(teamId, recipientId), false);
+    const remaining = cursor === undefined ? ids : ids.filter(id => id > cursor);
+    const pageIds = remaining.slice(0, limit);
+    const records = await Promise.all(pageIds.map(id => this.readClaimed(teamId, recipientId, id)));
     const messages = records.filter((message): message is Envelope => message !== undefined);
     const nextCursor = remaining.length > limit ? pageIds.at(-1) : undefined;
     return { messages, ...(nextCursor ? { nextCursor } : {}) };
@@ -222,6 +248,15 @@ export class InboxStore {
         this.paths.claimedMessage(teamId, recipientId, messageId),
         this.paths.pendingMessage(teamId, recipientId, messageId),
       );
+    });
+  }
+
+  async removePending(teamId: string, recipientId: string, messageId: string): Promise<boolean> {
+    await this.prepare();
+    return withStorageLock(this.paths.inboxLock(teamId), async () => {
+      await this.requireTeam(teamId);
+      if (!await this.prepareRecipient(teamId, recipientId, false)) return false;
+      return removeAtomic(this.paths.pendingMessage(teamId, recipientId, messageId));
     });
   }
 

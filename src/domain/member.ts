@@ -10,6 +10,7 @@ export type Member = {
   readonly schemaVersion: 2;
   readonly teamId: string;
   readonly memberId: string;
+  readonly sessionId?: string;
   readonly alias: string;
   readonly kind: MemberKind;
   readonly generation: number;
@@ -24,6 +25,7 @@ export const MemberSchema = Type.Object({
   schemaVersion: Type.Literal(2),
   teamId: TeamIdSchema,
   memberId: EntityIdSchema,
+  sessionId: Type.Optional(EntityIdSchema),
   alias: TeamIdSchema,
   kind: Type.Union([Type.Literal('external'), Type.Literal('supervised')]),
   generation: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
