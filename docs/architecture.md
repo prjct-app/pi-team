@@ -88,7 +88,30 @@ repository research and implementation belong to peers. A granted publication or
 allows the non-mutating repository tools and shell needed for that explicit action; direct
 lead `edit` and `write` remain blocked.
 
-## Storage model
+## Team v2 core (staged)
+
+The replacement storage core is implemented under `src/domain/` and `src/storage/`, but
+is deliberately not connected to the extension until the messaging and membership phases
+land. It uses `${PRJCT_HOME:-~/.prjct}/pi-team/` and separates team metadata, members,
+inbox envelopes, receipts, and leases into independent bounded records. The active v1
+runtime described below continues to use its existing paths during this transition.
+
+Every v2 record has a strict schema marker and semantic validation. Dynamic path segments
+come only from validated IDs. Sensitive directories and files are private (`0700`/`0600`),
+symlinks fail closed, malformed or future-schema records remain untouched, and publication
+uses a same-directory temporary file, file `fsync`, atomic link or rename, and directory
+`fsync`. Mutable team and member metadata retain only one previous copy; immutable spool
+entries do not create revision journals or full snapshots.
+
+The v2 inbox defaults to 100 queued or claimed envelopes per recipient and 1,000 per team.
+Bodies are limited by UTF-8 byte length to 8 KiB and expire within 24 hours. Receipt cleanup
+starts 24 hours after a terminal status. Reads are paginated. Presence, delivery, and
+resource leases require both a random token and monotonically increasing generation, so an
+expired holder cannot renew or release its replacement. Releasing a lease retains a bounded
+tombstone at the same lease ID, preserving its generation for the next acquisition. Startup legacy detection performs
+one `lstat` of the old root only; it never traverses, migrates, or deletes legacy records.
+
+## Storage model (v1, active)
 
 Each team is one JSON record at `~/.pi/agent/teams/<team>/state.json`, honouring
 `PI_CODING_AGENT_DIR`. The record holds the member roster and the full message
