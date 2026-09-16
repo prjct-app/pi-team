@@ -28,6 +28,7 @@ const member = (memberId: string, alias: string, generation = 1): Member => ({
   schemaVersion: 2,
   teamId: 'shop',
   memberId,
+  sessionId: `${memberId}-session`,
   alias,
   kind: 'external',
   generation,
@@ -250,7 +251,11 @@ test('lease replacement fences old tokens and receipts expire only after termina
     status: 'delivered', at: new Date(now).toISOString(),
   };
   await receipts.record(delivered);
-  now += 2_000;
+  now += 1_000;
+  await receipts.record({ ...delivered, at: new Date(now).toISOString() });
+  assert.equal((await receipts.read('shop', 'backend-1', 'message-1'))?.at, delivered.at,
+    'Repeating one receipt state is idempotent and preserves its first timestamp');
+  now += 1_000;
   assert.equal(await receipts.purgeExpired('shop', 'backend-1'), 0, 'Nonterminal receipts do not expire');
   await receipts.record({ ...delivered, status: 'replied', at: new Date(now).toISOString() });
   now += 2_000;
