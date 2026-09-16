@@ -79,7 +79,7 @@ test('managed runtime reuses persistent peer sessions and emits only structured 
   assert.equal(second.outcome, 'completed');
   assert.deepEqual(activities.filter(event => event.summary === 'Using edit').map(event => event.workItemId), ['api', 'api-tests']);
   assert.deepEqual(sessions, ['/sessions/backend.jsonl']);
-  runtime.dispose();
+  await runtime.dispose();
   assert.equal(session.disposed, true);
 });
 
@@ -179,7 +179,7 @@ test('corrective peers receive completed peer commits without replaying integrat
   const result = await runtime.execute({ ...data.plan, workItems: [completedApi, completedReview, completedIntegration, corrective] }, corrective, { ...data.agent, workItemId: corrective.id });
   assert.equal(result.outcome, 'completed');
   assert.deepEqual(trees.calls.integrated, ['d'.repeat(40), 'e'.repeat(40)]);
-  runtime.dispose();
+  await runtime.dispose();
 });
 
 
@@ -196,7 +196,51 @@ test('hung peer turns are aborted and surfaced for scheduler recovery', async (t
   const runtime = new ManagedExecutionRuntime({ team: 'demo', worktrees: worktrees(root).value, createSession: async () => hanging, runTimeoutMs: 10 });
   await assert.rejects(runtime.execute(data.plan, data.item, data.agent), /execution limit/);
   assert.equal(aborted.value, true);
-  runtime.dispose();
+  await runtime.dispose();
+});
+
+test('disposing the runtime awaits abort and fences the active peer result', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-dispose-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const data = fixture(root);
+  const promptGate: { resolve?: () => void } = {};
+  const session = new FakeSession();
+  session.prompt = async () => new Promise<void>(resolve => { promptGate.resolve = resolve; });
+  session.abort = async () => { promptGate.resolve?.(); };
+  const trees = worktrees(root);
+  const runtime = new ManagedExecutionRuntime({ team: 'demo', worktrees: trees.value, createSession: async () => session });
+  const execution = runtime.execute(data.plan, data.item, data.agent);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(promptGate.resolve, 'The peer turn must be active before disposal');
+  await runtime.dispose();
+  const result = await execution;
+  assert.equal(result.outcome, 'interrupted');
+  assert.equal(trees.calls.commits, 0);
+  assert.equal(session.disposed, true);
+});
+
+test('disposal waits for a peer session that is still being created', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-runtime-opening-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const data = fixture(root);
+  const session = new FakeSession();
+  const creation: { resolve?: (value: PeerSession) => void } = {};
+  const runtime = new ManagedExecutionRuntime({
+    team: 'demo', worktrees: worktrees(root).value,
+    createSession: async () => new Promise<PeerSession>(resolve => { creation.resolve = resolve; }),
+  });
+  const execution = runtime.execute(data.plan, data.item, data.agent).then(() => undefined, error => error as Error);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(creation.resolve, 'Session creation must be pending before disposal');
+  const disposal = runtime.dispose();
+  const settled = { value: false };
+  void disposal.then(() => { settled.value = true; });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(settled.value, false);
+  creation.resolve?.(session);
+  await disposal;
+  assert.match((await execution)?.message ?? '', /closed while creating a session/);
+  assert.equal(session.disposed, true);
 });
 
 test('managed peer resource loading disables ambient extensions', async (t) => {

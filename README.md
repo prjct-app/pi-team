@@ -99,6 +99,8 @@ a dedicated branch, worktree, role, and current work item. The lead is the only 
 interface and never treats peer output as authorization. Repository tools are blocked in
 the lead while managed work is active: research, auditing, implementation, and review are
 delegated to peers. The lead remains available for normal conversation and status questions.
+Managed terminals persist across assigned work but remain owned by the lead session: quitting
+or replacing that session performs a bounded, identity-verified shutdown of the terminals it created.
 
 Each lead session has one active **factory plan**, not a stack of unrelated plan widgets.
 That plan accepts multiple work batches over time. Send another action-oriented prompt—or

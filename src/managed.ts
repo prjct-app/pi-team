@@ -16,7 +16,7 @@ import { TeamPlanPanel, teamWidget, teamWidgetLines } from './team-plan-panel.ts
 import { discoverRepository, WorktreeManager, type ManagedWorktree, type RepositoryState } from './worktrees.ts';
 
 type ManagedRuntime = SchedulerRuntime & {
-  dispose(): void;
+  dispose(): Promise<void>;
   abortWork?(workItemId: string): void;
   prepare?(plan: ManagedPlan): Promise<void>;
   openTerminal?(alias: string): Promise<string>;
@@ -95,6 +95,7 @@ export class ManagedCoordinator {
   private runtimeFactory: RuntimeFactory;
   private refreshMs: number;
   private slot: { current: State } = { current: { closed: false } };
+  private shutdownPromise?: Promise<void>;
 
   constructor(readonly pi: ExtensionAPI, options: ManagedOptions = {}) {
     this.root = options.root ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'managed-teams');
@@ -225,7 +226,7 @@ export class ManagedCoordinator {
     if (this.get().team) {
       if (this.get().timer) clearInterval(this.get().timer);
       this.get().scheduler?.stop();
-      this.get().runtime?.dispose();
+      await this.get().runtime?.dispose();
       context.ui.setWidget('managed-team', undefined);
       context.ui.setStatus('managed-team', undefined);
       this.set(() => ({ team: undefined, goalStatus: undefined, reportedStatus: undefined, scheduler: undefined, runtime: undefined, timer: undefined, lastWidget: undefined }));
@@ -313,7 +314,7 @@ ${safeObjective}`;
 
   private async startScheduler(context: ExtensionContext, team: string): Promise<void> {
     this.get().scheduler?.stop();
-    this.get().runtime?.dispose();
+    await this.get().runtime?.dispose();
     const holder: { scheduler?: ManagedScheduler } = {};
     const runtime = this.runtimeFactory({
       team,
@@ -346,7 +347,7 @@ ${safeObjective}`;
       this.startRefresh();
     } catch (error) {
       scheduler.stop();
-      runtime.dispose();
+      await runtime.dispose();
       const now = Date.now();
       if (record?.payload.workItems[0]) await this.store.update(team, plan => ({ ...plan,
         goal: { ...plan.goal, status: 'blocked', updatedAt: now },
@@ -642,14 +643,17 @@ ${request.objective}`.slice(0, 16_000);
     else await this.refreshWidget();
   }
 
-  shutdown(): void {
-    this.set(() => ({ closed: true }));
-    if (this.get().timer) clearInterval(this.get().timer);
-    this.get().scheduler?.stop();
-    this.get().runtime?.dispose();
-    this.get().ctx?.ui.setWidget('managed-team', undefined);
-    this.get().ctx?.ui.setStatus('managed-team', undefined);
-    this.set(() => ({ timer: undefined, scheduler: undefined, runtime: undefined, lastWidget: undefined }));
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    const state = this.get();
+    this.set(() => ({ closed: true, timer: undefined, scheduler: undefined, runtime: undefined, lastWidget: undefined }));
+    if (state.timer) clearInterval(state.timer);
+    state.scheduler?.stop();
+    state.ctx?.ui.setWidget('managed-team', undefined);
+    state.ctx?.ui.setStatus('managed-team', undefined);
+    const cleanup = state.runtime?.dispose() ?? Promise.resolve();
+    this.shutdownPromise = cleanup;
+    return cleanup;
   }
 }
 

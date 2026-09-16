@@ -80,8 +80,8 @@ test('one normal prompt creates a plan; blueprint submission advances autonomous
   t.after(() => rm(root, { recursive: true, force: true }));
   const extension = api();
   const ctx = context(extension.entries);
-  const runtime: SchedulerRuntime & { dispose(): void } = {
-    now: () => Date.now(), dispose() {},
+  const runtime: SchedulerRuntime & { dispose(): Promise<void> } = {
+    now: () => Date.now(), async dispose() {},
     async execute(_plan, item): Promise<ExecutionResult> {
       return { outcome: 'completed', summary: `${item.id} complete`, ...(item.kind === 'implementation' || item.kind === 'integration' ? { commit: item.id.padEnd(40, 'a') } : {}), ...(item.kind === 'verification' ? { tests: ['npm run test'] } : {}) };
     },
@@ -154,7 +154,45 @@ test('one normal prompt creates a plan; blueprint submission advances autonomous
   await coordinator.activate('Implement a second independent feature', ctx.value);
   assert.notEqual((await coordinator.snapshot()).team, completedTeam);
   assert.equal((await coordinator.snapshot()).goal.status, 'planning');
-  coordinator.shutdown();
+  await coordinator.shutdown();
+});
+
+test('coordinator shutdown is idempotent and awaits runtime disposal', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-coordinator-shutdown-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const extension = api();
+  const ctx = context(extension.entries);
+  const gate: { resolve?: () => void } = {};
+  const disposed = { count: 0 };
+  const runtime: SchedulerRuntime & { dispose(): Promise<void> } = {
+    now: () => Date.now(),
+    execute: async () => new Promise<ExecutionResult>(() => {}),
+    dispose() {
+      disposed.count++;
+      return new Promise<void>(resolve => { gate.resolve = resolve; });
+    },
+  };
+  const coordinator = new ManagedCoordinator(extension.value, {
+    root,
+    discover: async () => ({ root: '/repo', branch: 'develop', head: 'a'.repeat(40), clean: true }),
+    worktrees: worktrees(), runtimeFactory: () => runtime,
+  });
+  await coordinator.activate('Implement an owned runtime shutdown test', ctx.value);
+  await coordinator.submit({
+    agents: [{ alias: 'builder', role: 'Feature engineer' }],
+    workItems: [{ id: 'owned-work', title: 'Owned work', detail: 'Stay active until shutdown', kind: 'implementation', dependsOn: [], assignee: 'builder' }],
+  });
+  const first = coordinator.shutdown();
+  const second = coordinator.shutdown();
+  assert.equal(first, second);
+  assert.equal(disposed.count, 1);
+  const settled = { value: false };
+  void first.then(() => { settled.value = true; });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(settled.value, false);
+  gate.resolve?.();
+  await first;
+  assert.equal(settled.value, true);
 });
 
 test('the installed extension activates from ordinary input without create, join, wake, or resume', async (t) => {
@@ -244,8 +282,7 @@ test('repository teams are discovered before creation, can receive queued work, 
 
   await requester.open(requesterContext.value);
   assert.equal(requesterContext.customOptions.length, 1, 'A different lead can monitor the repository plan without taking ownership');
-  owner.shutdown();
-  requester.shutdown();
+  await Promise.all([owner.shutdown(), requester.shutdown()]);
   await new Promise(resolve => setTimeout(resolve, 30));
   await rm(root, { recursive: true, force: true });
 });
@@ -275,7 +312,7 @@ test('user control can unblock and retry exhausted work with a durable audit rec
   assert.equal(updated?.payload.workItems[0]?.maxAttempts, 3);
   assert.equal(updated?.payload.blockers[0]?.status, 'resolved');
   assert.equal(updated?.payload.controls?.at(-1)?.action, 'retry-work');
-  coordinator.shutdown();
+  await coordinator.shutdown();
 });
 
 test('dirty user checkout state is preserved and excluded rather than blocking autonomous work', async (t) => {
@@ -289,5 +326,5 @@ test('dirty user checkout state is preserved and excluded rather than blocking a
   await coordinator.activate('Build a new reporting dashboard', ctx.value);
   assert.equal((await coordinator.snapshot()).goal.baseCommit, 'a'.repeat(40));
   assert.ok(ctx.notices.some(notice => /changes remain untouched and are not included/i.test(notice)));
-  coordinator.shutdown();
+  await coordinator.shutdown();
 });

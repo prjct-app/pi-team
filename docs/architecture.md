@@ -28,6 +28,14 @@ handoffs; those messages remain durable and are mirrored into the managed trace.
 can open any live peer with `/team terminal`, observe its actual Pi session, and steer or
 interrupt it directly. Closing the viewing window does not stop the tmux-hosted peer.
 
+Persistent means reusable for work owned by the current lead session, not detached from that
+owner. Each runtime records only the tmux sessions it created and marks them with random,
+instance-specific ownership metadata. Session shutdown fences scheduler completions, aborts
+in-process turns, and stops owned terminal process groups with a bounded SIGHUP, SIGTERM,
+SIGKILL sequence before removing a still token-matching tmux session. Process identity is
+revalidated from its PID, start token, and process group before every signal; a pre-existing
+session or a reused PID is never terminated. Shutdown is awaited and idempotent.
+
 Terminal session storage, worktree, branch, mailbox membership, tool activity, peer messages,
 commits, tests, results, blockers, and user control actions remain attributable to the plan
 and alias. Assistant private reasoning and raw credentials are never copied into the plan.

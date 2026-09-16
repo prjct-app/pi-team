@@ -187,6 +187,28 @@ test('recovery at maxAttempts is idempotent and never exceeds the schema budget'
   assert.equal((await store.snapshot('demo')).workItems[0].status, 'completed');
 });
 
+test('stopping the scheduler fences a late execution result', async (t) => {
+  const gate: { resolve?: (result: ExecutionResult) => void } = {};
+  const runtime: SchedulerRuntime = {
+    now: () => Date.now(),
+    execute: async () => new Promise<ExecutionResult>(resolve => { gate.resolve = resolve; }),
+  };
+  const { store, journal, scheduler } = await setup(t, runtime, value => ({
+    ...value,
+    workItems: value.workItems.filter(item => item.id === 'api'),
+    agents: value.agents.filter(agent => agent.alias === 'backend'),
+  }));
+  await scheduler.start();
+  assert.ok(gate.resolve, 'The execution must be active before shutdown');
+  scheduler.stop();
+  gate.resolve?.({ outcome: 'completed', summary: 'Late completion', commit: 'f'.repeat(40) });
+  await scheduler.idle();
+  const snapshot = await store.snapshot('demo', await journal.readTeam('demo', ['backend']));
+  assert.equal(snapshot.workItems[0].status, 'active');
+  assert.equal(snapshot.workItems[0].commit, undefined);
+  assert.ok(!(snapshot.activity.backend ?? []).some(event => event.summary === 'Late completion'));
+});
+
 test('unrelated launches cannot clear an existing blocked goal', () => {
   const value = plan('/repo');
   value.goal.status = 'blocked';

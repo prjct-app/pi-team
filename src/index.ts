@@ -748,18 +748,21 @@ export function installTeam(pi: ExtensionAPI, options: { root?: string; managedR
     enqueueTick();
   });
   pi.on('session_shutdown', async () => {
-    managed.shutdown();
+    const managedCleanup = managed.shutdown();
     set(() => ({ closed: true }));
     stop();
-    await queue(async () => {
-      const { member, active, leaving } = get();
-      if (member) {
-        if (active && !leaving) { set(() => ({ paused: true, pauseReason: 'recovery' })); persist(); }
-        await box.leave(member).catch(notice);
-      }
-      set(() => ({ member: undefined, active: undefined }));
-      showWidget(undefined);
-    });
+    try { await managedCleanup; }
+    finally {
+      await queue(async () => {
+        const { member, active, leaving } = get();
+        if (member) {
+          if (active && !leaving) { set(() => ({ paused: true, pauseReason: 'recovery' })); persist(); }
+          await box.leave(member).catch(notice);
+        }
+        set(() => ({ member: undefined, active: undefined }));
+        showWidget(undefined);
+      });
+    }
   });
 }
 
