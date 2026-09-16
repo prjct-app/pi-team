@@ -137,6 +137,7 @@ export class ManagedScheduler {
   private running = new Set<string>();
   private stopped = false;
   private started = false;
+  private ownerEpoch = 0;
 
   constructor(
     readonly team: string,
@@ -167,14 +168,19 @@ export class ManagedScheduler {
     } catch (error) { this.started = false; throw error; }
   }
 
-  stop(): void { this.stopped = true; }
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.ownerEpoch++;
+  }
 
   async kick(): Promise<void> {
     await this.queue(() => this.pump());
   }
 
   async recordActivity(alias: string, input: ActivityInput): Promise<void> {
-    await this.queue(() => this.appendActivity(alias, input));
+    if (this.stopped) return;
+    await this.queue(() => this.stopped ? Promise.resolve() : this.appendActivity(alias, input));
   }
 
   private async appendActivity(alias: string, input: ActivityInput): Promise<void> {
@@ -190,8 +196,10 @@ export class ManagedScheduler {
 
   private async pump(): Promise<void> {
     if (this.stopped) return;
+    const epoch = this.ownerEpoch;
     const now = this.runtime.now();
     const updated = await this.store.update(this.team, plan => scheduleReady(plan, now).plan);
+    if (this.stopped || epoch !== this.ownerEpoch) return;
     const launches = updated.payload.workItems
       .filter(item => ['active', 'verifying'].includes(item.status) && item.updatedAt === now && !this.running.has(item.id))
       .map(item => ({ item, agent: updated.payload.agents.find(agent => agent.workItemId === item.id) }));
@@ -200,18 +208,22 @@ export class ManagedScheduler {
       if (launch.agent) await this.appendActivity(launch.agent.alias, { kind: 'assignment', summary: `Started ${launch.item.title}`, workItemId: launch.item.id });
     }
     for (const launch of launches) {
+      if (this.stopped || epoch !== this.ownerEpoch) { this.running.delete(launch.item.id); continue; }
       void this.runtime.execute(updated.payload, launch.item, launch.agent)
-        .then(result => this.queue(() => this.finish(launch, result)))
-        .catch(error => this.queue(() => this.finish(launch, { outcome: 'failed', summary: error instanceof Error ? error.message : String(error) })));
+        .then(result => this.queue(() => this.finish(launch, result, epoch)))
+        .catch(error => this.queue(() => this.finish(launch, { outcome: 'failed', summary: error instanceof Error ? error.message : String(error) }, epoch)));
     }
   }
 
-  private async finish(launch: Launch, result: ExecutionResult): Promise<void> {
+  private async finish(launch: Launch, result: ExecutionResult, epoch: number): Promise<void> {
     this.running.delete(launch.item.id);
+    if (this.stopped || epoch !== this.ownerEpoch) return;
     const now = this.runtime.now();
     const blockerId = randomUUID();
     const approvalId = randomUUID();
-    const updated = await this.store.update(this.team, plan => finishPlan(plan, launch.item.id, result, now, blockerId, approvalId));
+    const updated = await this.store.update(this.team, plan => this.stopped || epoch !== this.ownerEpoch
+      ? plan : finishPlan(plan, launch.item.id, result, now, blockerId, approvalId));
+    if (this.stopped || epoch !== this.ownerEpoch) return;
     if (launch.agent) {
       const cancelled = updated.payload.workItems.find(item => item.id === launch.item.id)?.status === 'cancelled';
       await this.appendActivity(launch.agent.alias, {

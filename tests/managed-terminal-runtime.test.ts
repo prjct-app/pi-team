@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { ManagedTerminalRuntime, openTerminalSession, terminalSessionId, terminalSessionName, type TerminalCommand } from '../src/managed-terminal-runtime.ts';
 import type { Membership, Message, Snapshot } from '../src/mailbox.ts';
+import type { ProcessController, ProcessIdentity } from '../src/process-identity.ts';
 import type { ManagedAgentState, ManagedPlan, WorkItem } from '../src/managed-schema.ts';
 
 const member: Membership = { team: 'demo', alias: 'managed-lead', session: 'managed', token: 'token' };
@@ -45,13 +46,30 @@ test('terminal session names are stable and an attach opens a real terminal wind
   assert.equal(calls[1]?.program, process.platform === 'darwin' ? 'open' : 'x-terminal-emulator');
 });
 
+test('shutdown timing configuration rejects non-progressing waits', () => {
+  assert.throws(() => new ManagedTerminalRuntime({
+    team: 'demo', shutdownTimings: { pollMs: 0 },
+    worktrees: {
+      allocate: async () => ({ alias: 'integration', path: '/integration', branch: 'pi-team/demo/integration', head: 'a'.repeat(40), reused: false }),
+      integrate: async () => ({ ok: true as const, head: 'b'.repeat(40), applied: [] }),
+      git: async () => ({ stdout: 'a'.repeat(40), stderr: '' }), commit: async () => ({ head: 'a'.repeat(40), changed: false }),
+    },
+  }), /positive poll interval/);
+});
+
 test('managed peer work runs through a persistent tmux Pi terminal and durable mailbox', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-terminal-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls: { program: string; args: readonly string[] }[] = [];
+  const metadata = new Map<string, string>();
   const run: TerminalCommand = async (program, args) => {
     calls.push({ program, args });
     if (args[0] === 'has-session') throw new Error('missing');
+    if (args[0] === 'set-option') metadata.set(String(args[3]), String(args[4]));
+    if (args[0] === 'display-message' && String(args.at(-1)).includes('@pi-team-runtime-id')) {
+      return { stdout: `${metadata.get('@pi-team-runtime-id')}\t${metadata.get('@pi-team-owner-instance')}\t${metadata.get('@pi-team-token-hash')}\n`, stderr: '' };
+    }
+    return { stdout: '', stderr: '' };
   };
   const request: Message = { id: 'request-1', team: 'demo', from: member.alias, to: 'backend', subject: 'login', body: 'work', kind: 'request', state: 'pending', created: 1, rootId: 'request-1' };
   const result: Message = { id: 'result-1', team: 'demo', from: 'backend', to: member.alias, subject: 'result', body: 'done', kind: 'result', state: 'pending', created: 2, rootId: 'request-1', parentId: request.id,
@@ -111,7 +129,113 @@ test('an existing terminal is accepted only through durable membership without i
   });
   t.after(() => runtime.dispose());
   await runtime.prepare(plan);
+  await runtime.dispose();
   assert.ok(!calls.some(call => call.args[0] === 'send-keys'));
   assert.ok(!calls.some(call => call.args[0] === 'kill-session'));
   assert.ok(!calls.some(call => call.args[0] === 'new-session'));
+});
+
+type ControlledTerminal = {
+  runtime: ManagedTerminalRuntime;
+  calls: { program: string; args: readonly string[] }[];
+  signals: NodeJS.Signals[];
+  metadata: Map<string, string>;
+};
+
+function controlledTerminal(root: string, inspect: ProcessController['inspect'], onSignal?: (signal: NodeJS.Signals) => void, failOption?: string): ControlledTerminal {
+  const calls: { program: string; args: readonly string[] }[] = [];
+  const signals: NodeJS.Signals[] = [];
+  const metadata = new Map<string, string>();
+  const environment = new Map<string, string>();
+  const run: TerminalCommand = async (program, args) => {
+    calls.push({ program, args });
+    if (args[0] === 'has-session') throw new Error('missing');
+    if (args[0] === 'new-session') {
+      for (const value of args.filter(value => /^PI_TEAM_(?:RUNTIME_ID|OWNER_INSTANCE|TOKEN_HASH)=/.test(value))) {
+        const separator = value.indexOf('=');
+        environment.set(value.slice(0, separator), value.slice(separator + 1));
+      }
+    }
+    if (args[0] === 'set-option') {
+      if (args[3] === failOption) throw new Error('set-option failed');
+      metadata.set(String(args[3]), String(args[4]));
+    }
+    if (args[0] === 'show-environment') return { stdout: [...environment].map(([key, value]) => `${key}=${value}`).join('\n'), stderr: '' };
+    if (args[0] === 'display-message' && args.at(-1) === '#{pane_pid}') return { stdout: '4321\n', stderr: '' };
+    if (args[0] === 'display-message' && String(args.at(-1)).includes('@pi-team-runtime-id')) {
+      return { stdout: `${metadata.get('@pi-team-runtime-id')}\t${metadata.get('@pi-team-owner-instance')}\t${metadata.get('@pi-team-token-hash')}\n`, stderr: '' };
+    }
+    return { stdout: '', stderr: '' };
+  };
+  const processController: ProcessController = {
+    inspect,
+    async signal(_identity, signal) { signals.push(signal); onSignal?.(signal); return true; },
+    async delay() {},
+  };
+  const runtime = new ManagedTerminalRuntime({
+    team: 'demo', agentDir: root, command: run, processController,
+    shutdownTimings: { gracefulMs: 0, termMs: 0, killMs: 0, pollMs: 1 },
+    ownerInstanceId: 'owner-instance', ownershipToken: 'owner-token',
+    mailbox: {
+      teams: async () => ['demo'], create: async () => {}, join: async () => member, leave: async () => {}, heartbeat: async () => {},
+      snapshot: async () => snapshot(), send: async () => { throw new Error('unused'); }, receive: async () => undefined,
+    },
+    worktrees: {
+      allocate: async () => ({ alias: 'integration', path: '/integration', branch: 'pi-team/demo/integration', head: 'a'.repeat(40), reused: false }),
+      integrate: async () => ({ ok: true as const, head: 'b'.repeat(40), applied: [] }),
+      git: async () => ({ stdout: 'a'.repeat(40), stderr: '' }), commit: async () => ({ head: 'a'.repeat(40), changed: false }),
+    },
+  });
+  return { runtime, calls, signals, metadata };
+}
+
+test('disposing an owned terminal escalates in order and is idempotent', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-terminal-shutdown-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const identity: ProcessIdentity = { processPid: 4321, processGroupId: 8765, processStartToken: 'start-a' };
+  const alive = { value: true };
+  const controlled = controlledTerminal(root, async () => alive.value ? identity : undefined, signal => {
+    if (signal === 'SIGKILL') alive.value = false;
+  });
+  await controlled.runtime.prepare({ ...plan, agents: [agent] });
+  await Promise.all([controlled.runtime.dispose(), controlled.runtime.dispose()]);
+  assert.deepEqual(controlled.signals, ['SIGHUP', 'SIGTERM', 'SIGKILL']);
+  assert.equal(controlled.calls.filter(call => call.args[0] === 'kill-session').length, 1);
+  assert.ok(controlled.calls.some(call => call.args[0] === 'set-option' && call.args.includes('@pi-team-runtime-id')));
+});
+
+test('a partial tmux metadata write still cleans up the session created by this launch', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-terminal-partial-mark-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const controlled = controlledTerminal(root, async () => undefined, undefined, '@pi-team-owner-instance');
+  await assert.rejects(controlled.runtime.prepare({ ...plan, agents: [agent] }), /set-option failed/);
+  await controlled.runtime.dispose();
+  assert.deepEqual(controlled.signals, []);
+  assert.equal(controlled.calls.filter(call => call.args[0] === 'kill-session').length, 1);
+});
+
+test('changed tmux ownership metadata blocks signals and session termination', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-terminal-token-fence-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const identity: ProcessIdentity = { processPid: 4321, processGroupId: 8765, processStartToken: 'start-a' };
+  const controlled = controlledTerminal(root, async () => identity);
+  await controlled.runtime.prepare({ ...plan, agents: [agent] });
+  controlled.metadata.set('@pi-team-token-hash', 'replaced-owner');
+  await assert.rejects(controlled.runtime.dispose(), /ownership metadata changed/);
+  assert.deepEqual(controlled.signals, []);
+  assert.equal(controlled.calls.filter(call => call.args[0] === 'kill-session').length, 0);
+});
+
+test('a reused PID is never signalled during terminal shutdown', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-team-terminal-pid-reuse-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const original: ProcessIdentity = { processPid: 4321, processGroupId: 8765, processStartToken: 'start-a' };
+  const replacement: ProcessIdentity = { ...original, processStartToken: 'start-b' };
+  const inspections = { count: 0 };
+  const controlled = controlledTerminal(root, async () => ++inspections.count === 1 ? original : replacement);
+  await controlled.runtime.prepare({ ...plan, agents: [agent] });
+  await controlled.runtime.dispose();
+  assert.deepEqual(controlled.signals, []);
+  assert.equal(controlled.calls.filter(call => call.args[0] === 'kill-session').length, 1,
+    'The token-verified tmux session is removed without signalling the reused PID');
 });

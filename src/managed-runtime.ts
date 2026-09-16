@@ -52,6 +52,7 @@ export type RuntimeOptions = {
   sessionOpened?: (alias: string, sessionFile: string | undefined) => Promise<void> | void;
   now?: () => number;
   runTimeoutMs?: number;
+  shutdownAbortMs?: number;
 };
 
 async function exists(path: string | undefined): Promise<boolean> {
@@ -150,7 +151,10 @@ function taskPrompt(team: string, plan: ManagedPlan, item: WorkItem, agent: Mana
 
 export class ManagedExecutionRuntime implements SchedulerRuntime {
   private sessions = new Map<string, LiveSession>();
+  private openings = new Set<Promise<PeerSession>>();
   private closed = false;
+  private ownerEpoch = 0;
+  private disposePromise?: Promise<void>;
   private createSession: PeerSessionFactory;
   private verify: VerificationRunner;
 
@@ -175,10 +179,24 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
     };
   }
 
-  private async ensure(agent: ManagedAgentState, workItemId: string): Promise<PeerSession> {
+  private current(epoch: number): boolean { return !this.closed && epoch === this.ownerEpoch; }
+
+  private interrupted(): ExecutionResult {
+    return { outcome: 'interrupted', summary: 'Managed peer runtime ownership changed before execution completed.' };
+  }
+
+  private async abortAndDispose(session: PeerSession): Promise<void> {
+    const timer: { value?: ReturnType<typeof setTimeout> } = {};
+    const timeout = new Promise<void>(resolve => { timer.value = setTimeout(resolve, this.options.shutdownAbortMs ?? 1_000); });
+    await Promise.race([session.abort().catch(() => {}), timeout]);
+    if (timer.value) clearTimeout(timer.value);
+    session.dispose();
+  }
+
+  private async ensureInner(agent: ManagedAgentState, workItemId: string, epoch: number): Promise<PeerSession> {
     const live = this.sessions.get(agent.alias);
     if (live) { live.tracker.workItemId = workItemId; return live.session; }
-    if (this.closed) throw new Error('Managed peer runtime is closed');
+    if (!this.current(epoch)) throw new Error('Managed peer runtime is closed');
     const tracker = { workItemId };
     const session = await this.createSession({
       cwd: agent.worktree,
@@ -188,29 +206,44 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
       tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'team_peer_send'],
       customTools: [this.peerTool(agent, tracker)],
     });
+    if (!this.current(epoch)) {
+      await this.abortAndDispose(session);
+      throw new Error('Managed peer runtime closed while creating a session');
+    }
     session.setSessionName(`${this.options.team}:${agent.alias}`);
     const unsubscribe = session.subscribe(event => {
-      if (event.type === 'tool_execution_start') {
+      if (event.type === 'tool_execution_start' && this.current(epoch)) {
         void this.options.activity?.(agent.alias, { kind: 'tool', summary: `Using ${event.toolName}`, workItemId: tracker.workItemId });
       }
     });
     this.sessions.set(agent.alias, { session, unsubscribe, tracker });
     await this.options.sessionOpened?.(agent.alias, session.sessionFile);
-    await this.options.activity?.(agent.alias, { kind: 'lifecycle', summary: agent.sessionFile ? 'Resumed persistent session' : 'Started persistent session', workItemId });
+    if (this.current(epoch)) await this.options.activity?.(agent.alias, { kind: 'lifecycle', summary: agent.sessionFile ? 'Resumed persistent session' : 'Started persistent session', workItemId });
     return session;
   }
 
-  private async peer(plan: ManagedPlan, item: WorkItem, agent: ManagedAgentState): Promise<ExecutionResult> {
+  private ensure(agent: ManagedAgentState, workItemId: string, epoch: number): Promise<PeerSession> {
+    const pending = this.ensureInner(agent, workItemId, epoch);
+    const tracked = pending.finally(() => { this.openings.delete(tracked); });
+    this.openings.add(tracked);
+    return tracked;
+  }
+
+  private async peer(plan: ManagedPlan, item: WorkItem, agent: ManagedAgentState, epoch: number): Promise<ExecutionResult> {
     if (item.kind === 'corrective') {
       const commits = plan.workItems.filter(candidate => candidate.status === 'completed' && candidate.commit && !['integration', 'verification'].includes(candidate.kind)).map(candidate => candidate.commit!);
       const prepared = await this.options.worktrees.integrate({ path: agent.worktree }, commits);
+      if (!this.current(epoch)) return this.interrupted();
       if (!prepared.ok) return { outcome: 'failed', summary: `Could not prepare corrective worktree at ${prepared.commit}: ${prepared.error}` };
     }
-    const session = await this.ensure(agent, item.id);
+    const session = await this.ensure(agent, item.id, epoch);
     const before = (await this.options.worktrees.git(agent.worktree, ['rev-parse', 'HEAD'])).stdout;
+    if (!this.current(epoch)) return this.interrupted();
     await boundedTurn(session, taskPrompt(this.options.team, plan, item, agent), this.options.runTimeoutMs ?? 30 * 60_000);
+    if (!this.current(epoch)) return this.interrupted();
     const assistant = assistantResult(session.messages);
     const committed = await this.options.worktrees.commit({ path: agent.worktree }, `${item.kind === 'review' ? 'fix' : 'feat'}: ${item.title}`);
+    if (!this.current(epoch)) return this.interrupted();
     const changed = committed.head !== before;
     const outcome = assistant.stopReason === 'error' ? 'failed' : assistant.stopReason === 'aborted' ? 'interrupted' : 'completed';
     const summary = assistant.text.trim().slice(0, 4_000) || `Managed peer turn ${outcome} without a text report.`;
@@ -234,11 +267,13 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
   }
 
   async execute(plan: ManagedPlan, item: WorkItem, agent?: ManagedAgentState): Promise<ExecutionResult> {
-    if (this.closed) return { outcome: 'interrupted', summary: 'Managed peer runtime shut down before execution.' };
-    if (item.kind === 'integration') return this.integration(plan);
-    if (item.kind === 'verification') return this.verification(plan);
-    if (!agent) return { outcome: 'failed', summary: `No managed peer is available for ${item.id}.` };
-    return this.peer(plan, item, agent);
+    const epoch = this.ownerEpoch;
+    if (!this.current(epoch)) return { outcome: 'interrupted', summary: 'Managed peer runtime shut down before execution.' };
+    const result = item.kind === 'integration' ? await this.integration(plan)
+      : item.kind === 'verification' ? await this.verification(plan)
+      : agent ? await this.peer(plan, item, agent, epoch)
+      : { outcome: 'failed' as const, summary: `No managed peer is available for ${item.id}.` };
+    return this.current(epoch) ? result : this.interrupted();
   }
 
   abortWork(workItemId: string): void {
@@ -246,9 +281,18 @@ export class ManagedExecutionRuntime implements SchedulerRuntime {
     for (const live of sessions) void live.session.abort().catch(() => {});
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     this.closed = true;
-    for (const live of this.sessions.values()) { live.unsubscribe(); void live.session.abort().catch(() => {}); live.session.dispose(); }
-    this.sessions.clear();
+    this.ownerEpoch++;
+    const cleanup = (async () => {
+      await Promise.allSettled([...this.openings]);
+      const sessions = [...this.sessions.values()];
+      this.sessions.clear();
+      for (const live of sessions) live.unsubscribe();
+      await Promise.all(sessions.map(live => this.abortAndDispose(live.session)));
+    })();
+    this.disposePromise = cleanup;
+    return cleanup;
   }
 }
