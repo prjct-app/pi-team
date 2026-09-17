@@ -316,10 +316,11 @@ npm run check:package
 Pi loads the TypeScript entry point directly; there is no build step. Use `pi -e .`
 to try a checkout. Tests use isolated temporary state and never call model APIs.
 
-The Team v2 domain, storage, membership, messaging, presence, reconciliation, and compact
-model-tool layers are staged under `src/domain/`, `src/storage/`, and `src/runtime/`. They
-remain disconnected from the active v1 extension until the supervisor and command phases
-land, so this checkout does not mix v1 sessions with v2 records.
+The Team v2 domain, storage, membership, messaging, presence, reconciliation, supervised-peer
+lifecycle, and compact model-tool layers are staged under `src/domain/`, `src/storage/`,
+`src/runtime/`, and `src/supervisor/`. They remain disconnected from the active v1 extension
+until the command integration phase lands, so this checkout does not mix v1 sessions with v2
+records.
 
 `npm run check` also enforces that `src/` contains no `let`: session state is a
 single immutable record updated functionally, and reads go through its accessor at
