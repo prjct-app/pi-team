@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Add `npm run build:pi`: a compiled local build in `~/.pi/agent/builds/<package>` that Pi loads instead of the TypeScript sources; supervised workers launch the built entry.
+
 ### Breaking changes
 
 - replace the v1 managed factory and automatic prompt interception with explicit Team v2 commands
