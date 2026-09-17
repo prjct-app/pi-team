@@ -1,337 +1,114 @@
 # Architecture
 
-How pi-team stores state, coordinates concurrent sessions, and recovers from
-failure. For everyday use see the [README](../README.md).
+This document describes the active Team v2 extension. For commands and usage, see the [README](../README.md).
 
-## Managed orchestration
+## Controller and session boundaries
 
-A normal action-oriented implementation prompt in a clean Git checkout creates a
-managed goal under `~/.pi/agent/managed-teams/<team>/plan.json`. The team id combines a readable objective slug with a short hash of
-the lead session and objective. The plan record uses the same revisioned,
-content-hashed compare-and-swap store as mailboxes, but remains separate from manual
-team lifecycle operations.
+`src/index.ts` composes the domain, storage, runtime, supervisor, command, migration, and UI layers. Loading the extension registers handlers but starts no background work. Membership activates the compact model tool, presence heartbeat, and delivery polling; leaving or shutdown removes them.
 
-The lead submits a TypeBox-validated DAG through `team_plan`. Each declared peer is
-allocated a private worktree and `pi-team/<team>/<alias>` branch from the exact base
-commit. Reuse checks both the expected branch and Git common directory, so a foreign
-repository cannot masquerade as a prior worktree. Worktree allocation holds a
-process-aware lock across `git worktree add` and is retryable; existing partial work
-is preserved rather than reset or deleted.
+Normal prompts are not intercepted. A system-prompt suffix is added only while membership is active. Model actions remain non-destructive; lifecycle, process control, migration, and purge remain slash commands with interactive confirmation where destructive.
 
-Managed peers are real interactive Pi processes hosted in persistent `tmux` sessions.
-The runtime creates one terminal per declared alias in that alias's worktree, launches Pi
-with only pi-team explicitly enabled, and joins the team's durable mailbox. This prevents
-ambient extension recursion while keeping the normal Pi TUI available. The scheduler sends
-DAG assignments through mailbox requests and consumes their correlated structured results.
-Peers can use `team_send` and `team_status` to exchange plan-scoped questions and dependency
-handoffs; those messages remain durable and are mirrored into the managed trace. The user
-can open any live peer with `/team terminal`, observe its actual Pi session, and steer or
-interrupt it directly. Closing the viewing window does not stop the tmux-hosted peer.
+Membership restoration is session-specific:
 
-Persistent means reusable for work owned by the current lead session, not detached from that
-owner. Each runtime records only the tmux sessions it created and marks them with random,
-instance-specific ownership metadata. Session shutdown fences scheduler completions, aborts
-in-process turns, and stops owned terminal process groups with a bounded SIGHUP, SIGTERM,
-SIGKILL sequence before removing a still token-matching tmux session. Process identity is
-revalidated from its PID, start token, and process group before every signal; a pre-existing
-session or a reused PID is never terminated. Shutdown is awaited and idempotent.
+- Reload can retain the exact membership. A supervised owner handoff additionally requires the same process nonce, same session, a new instance ID, and a higher owner epoch.
+- A failed reload expires into membership cleanup and supervised-runtime shutdown or worker self-shutdown.
+- `/new` and `/fork` do not inherit membership or workers.
+- A resumed historical session can restore its own membership but cannot adopt the outgoing session's worker ownership.
+- Normal shutdown closes this owner's supervisor and leaves membership. External peer processes are never terminated.
 
-Terminal session storage, worktree, branch, mailbox membership, tool activity, peer messages,
-commits, tests, results, blockers, and user control actions remain attributable to the plan
-and alias. Assistant private reasoning and raw credentials are never copied into the plan.
-A 30-minute health limit interrupts a stuck turn. Failed work retries within its budget,
-prefers reassignment to an idle peer, and preserves the failed peer's worktree.
+## Domain and storage
 
-The scheduler serializes transitions but launches independent ready nodes concurrently.
-Dependencies unlock from durable state, without model polling or `/team wake` turns.
-On lead reload, an active assignment is requeued without consuming another attempt,
-and the persistent peer session is reopened from its saved session file. Completed
-peer commits are cherry-picked by full SHA into a dedicated integration worktree.
-Standard package verification follows; failures create at most two corrective DAG
-cycles before becoming a visible blocker. Coordinator git and verification
-subprocesses inherit a sanitized environment, and verification uses `node --run`.
+State lives under `${PRJCT_HOME:-~/.prjct}/pi-team/`:
 
-A ready or blocked transition wakes the lead once with structured coordinator state so
-the lead can provide one consolidated result. Publication is not automatic. An
-interactive `publish-pr` approval is required before push/PR work, and successful
-publication creates a distinct `ship` approval for merge/release/deploy. Model and peer
-messages cannot grant either gate.
+```text
+teams/<team>/
+  team.json
+  members/<member>.json
+  runtimes/<runtime>.json
+  inbox/<recipient>/{pending,claimed}/<message>.json
+  receipts/<recipient>/<message>.json
+  leases/<lease>.json
+control/
+```
 
-The Team Plan uses Pi 0.85.1's documented native widget pattern—the same interaction
-pattern used by pi-plan, without importing or depending on that package. A live component
-is registered with `ctx.ui.setWidget` and `placement: "belowEditor"` as soon as managed
-work starts. It renders the current work queue, progress, blockers, and approvals. The
-`/team plan` detailed component uses non-overlay `ctx.ui.custom`, so it temporarily replaces
-the editor instead of floating over the transcript. It exposes the complete DAG, critical
-path, agent state, approval gates, and bounded activity stream. Mouse member selection and
-keyboard navigation are behaviorally equivalent where fullscreen mouse input is available;
-no chain-of-thought is stored or rendered. When a repository has multiple durable plans,
-`/team plan` first shows a native plan chooser with objective, status, and peer states; the
-chosen plan remains live-refreshing even when another lead session owns it. `/team control`
-records user-attributed pause, resume, cancellation, retry, reassignment, and unblock events.
-Cancelling an active item sends Ctrl-C to its tmux terminal and fences any late result.
+Records have strict schema versions and semantic validation. Dynamic path segments are validated IDs. Directories and files use private permissions; symlinked components, unsafe ownership, malformed data, and future schemas fail closed. Corrupt records remain in place.
 
-A lead session owns one factory plan at a time. The plan can receive additional work
-batches through normal action prompts or `/team <objective>`. `team_plan_add` appends each
-validated batch, its integration node, and its verification node to the existing DAG. The
-same persistent peers process multiple tasks sequentially per session, while distinct idle
-peers execute ready nodes concurrently. Local integration nodes are serialized across
-batches. This keeps one observable plan below the editor rather than stacking independent
-panels. Before new-team creation, the coordinator searches plans whose canonical
-`repoRoot` matches the current repository. The user chooses an existing team or explicitly
-creates another one. Cross-session assignments are queued in the selected plan and delivered
-to its owning lead; monitoring never transfers scheduler ownership.
+Publication uses private same-directory temporary files, file `fsync`, atomic linking or rename, and directory `fsync`. Mutable team/member metadata keeps one previous copy. Immutable spool records do not create journals or snapshots. Durable locks contain an owner PID and process-start identity; stale reclamation revalidates identity and remains mutually exclusive.
 
-While managed work is active, pi-team blocks the lead's built-in repository read/write and
-shell tools. The lead can converse, plan, inspect structured team status, and delegate, but
-repository research and implementation belong to peers. A granted publication or ship gate
-allows the non-mutating repository tools and shell needed for that explicit action; direct
-lead `edit` and `write` remain blocked.
+Quotas and byte limits bound all collections and records. Inbox reads, receipts, peer pages, the dashboard, and control frames are explicitly bounded.
 
-## Team v2 core (staged)
+## Membership and presence
 
-The replacement core is implemented under `src/domain/`, `src/storage/`, `src/runtime/`, and
-`src/supervisor/`, but is deliberately not connected to the extension until the command phase
-lands. It uses `${PRJCT_HOME:-~/.prjct}/pi-team/` and separates team metadata, members,
-inbox envelopes, receipts, and leases into independent bounded records. The active v1
-runtime described below continues to use its existing paths during this transition.
+A membership binds team ID, member ID, alias, session ID, cwd, kind, member generation, and a presence lease token/generation. Rejoining an offline alias advances generation and fences its previous owner. A live alias cannot be taken.
 
-Every v2 record has a strict schema marker and semantic validation. Dynamic path segments
-come only from validated IDs. Sensitive directories and files are private (`0700`/`0600`),
-symlinks fail closed, malformed or future-schema records remain untouched, and publication
-uses a same-directory temporary file, file `fsync`, atomic link or rename, and directory
-`fsync`. Mutable team and member metadata retain only one previous copy; immutable spool
-entries do not create revision journals or full snapshots.
+Presence is a renewable token-fenced lease. UI status derives from live presence rather than a stale membership flag. Leaving cancels outgoing requests, releases presence, marks the member left, and prevents the former credentials from publishing further work.
 
-The v2 inbox defaults to 100 queued or claimed envelopes per recipient and 1,000 per team.
-Bodies are limited by UTF-8 byte length to 8 KiB and expire within 24 hours. Receipt cleanup
-starts 24 hours after a terminal status. Reads are paginated. Presence, delivery, and
-resource leases require both a random token and monotonically increasing generation, so an
-expired holder cannot renew or release its replacement. Releasing a lease retains a bounded
-tombstone at the same lease ID, preserving its generation for the next acquisition. Startup legacy detection performs
-one `lstat` of the old root only; it never traverses, migrates, or deletes legacy records.
+Members are either:
 
-The staged runtime adds token-fenced joins, leaves, and presence; persistent offline inboxes;
-correlated requests, explicit replies, and durable cancellation; delivery and advisory
-resource claims; and a reconciler for expired presence, messages, receipts, and interrupted
-claims. Messages sent
-to an online generation are rejected after that generation is replaced, while messages sent
-to an offline durable address remain available to its next owner. A delivery marker is
-published before a body is returned to the model or injected, so a crash after injection is
-never automatically replayed. This deliberately prefers an interrupted request over duplicate
-side effects. Sender cancellation wins the request lock over a late reply, and closing code
-can cancel all outgoing requests before releasing membership. Automatic delivery rejects
-external peers and requires an explicit human-enabled flag for supervised peers.
+- `external`: a Pi session opened and controlled outside pi-team; durable messaging only, never automatic wake or process termination.
+- `supervised`: created by the explicit human `/team start` command and eligible for automatic request delivery through its owner-controlled runtime.
 
-A single compact `team` model tool is prepared for dynamic activation. It supports only
-`status`, `peers`, `inbox`, `claim`, `read`, `release`, `send`, and `reply`; `claim` and
-`release` coordinate advisory resource IDs while message delivery claims stay internal.
-Lifecycle, migration, purge, and process controls remain human-only. The tool and its system-prompt
-rules are active only while a session owns a membership. The staged controller is not yet
-registered by the active v1 extension.
+## Messaging and requests
 
-The staged supervisor gives every owned peer a durable runtime record fenced by owner session,
-process nonce, instance, and epoch. Workers authenticate over a private `0600` Unix socket
-using bounded, versioned NDJSON frames. In-memory ping/pong heartbeats avoid durable heartbeat
-writes, and a worker watchdog requests its own Pi shutdown if its owner disappears or a reload
-handoff is not completed. Same-process reload handoff requires the same session and process
-nonce; a resumed, forked, or newly opened process cannot adopt the old workers.
+Each recipient has independent pending and claimed message records. Messages carry bounded UTF-8 bodies, TTL, recipient generation, and explicit request/thread correlation. Offline durable addresses can accumulate work for their next valid owner; messages to a replaced live generation are rejected.
 
-Supervisor shutdown first sends `prepare_shutdown`, aborting only the correlated active request
-before requesting Pi's documented graceful `ctx.shutdown()`. Survivors are handled in parallel
-with bounded `SIGTERM` and `SIGKILL` stages. PID, process start token, process group, runtime ID,
-owner instance, and tmux token hash are revalidated before escalation. Changed metadata leaves
-the runtime blocked/lost instead of guessing ownership. Tmux sessions and external peers without
-matching runtime records are never signalled. This layer reuses the process-identity primitive
-introduced by the lifecycle hotfix and remains staged until commands wire it into `src/index.ts`.
+Request delivery proceeds as follows:
 
-## Storage model (v1, active)
+1. The supervised recipient must be idle and explicitly marked for automatic requests.
+2. Storage moves the envelope from pending to claimed under the inbox lock.
+3. A receipt and delivery marker are durable before the body reaches the model.
+4. The controller injects one untrusted-data message and starts the turn.
+5. The active token/generation-fenced claim is renewed during a long turn.
+6. The peer publishes an explicit correlated reply, or cancellation/failure reaches a terminal receipt.
 
-Each team is one JSON record at `~/.pi/agent/teams/<team>/state.json`, honouring
-`PI_CODING_AGENT_DIR`. The record holds the member roster and the full message
-history. Team folders are `0700` and files `0600`; an unsafe, symlinked, or
-foreign-owned directory or record fails closed rather than being repaired.
+A delivered request is never automatically replayed after model exposure. This favors prevention of duplicate filesystem or external side effects over guaranteed execution. Sender cancellation is durable and wins over a late reply. Reconciliation repairs bounded crash windows from receipts and envelopes, expires stale records, and marks lost claims failed.
 
-Records are wrapped in an envelope carrying a schema marker, a monotonically
-increasing revision, and a SHA-256 of the payload. A corrupt record is preserved
-for manual recovery, never erased. Mailboxes written before envelopes existed
-are read as revision 0 and rewritten as envelope records on their first write.
+The `team` model tool exposes metadata/status, bounded inbox reads, send/reply, and advisory resource claim/release. It cannot perform lifecycle, migration, or process operations.
 
-## Concurrency
+## Advisory resource claims
 
-Readers never take a lock. Every publication writes a private temporary file,
-hard-links it into a bounded `revisions/` history, and atomically renames it into
-place, so a concurrent read sees either the whole previous record or the whole
-next one. The history doubles as recovery evidence for an interrupted write.
+Resource claims are leases protected by acquisition token and generation. Claimed paths are normalized to absolute paths against the claimant's cwd before storage, so peers with different working directories compare the same filesystem target. Another member's active overlapping claim blocks Pi's structured `edit` and `write` tools. Bash is intentionally not parsed as a shell language; when a command visibly names a claimed resource, the controller warns but cannot reliably block every possible mutation. Claims coordinate cooperative agents and do not change OS permissions.
 
-Writers compare-and-swap on the revision under a short-lived per-team lock in
-`~/.pi/agent/teams/.locks/`. Keeping the lock outside the team directory lets
-rename and deletion fence stale publishers without allowing them to recreate a
-moved directory. Normal publications also acquire the pre-0.6 compatibility
-lock beside `state.json`, after the stable lock. This overlap is required while
-sessions from both sides of the lock migration remain alive during a rolling
-reload; without it, two versions could publish the same next revision and lose
-a claim. The compatibility lock is opened without creating its parent, so a
-stale writer still cannot resurrect a deleted team. A conflict fails fast and
-the caller retries against a fresh read. A publication lock abandoned by a crashed
-writer is reclaimed after ten seconds. Worktree allocation writes the holder pid and
-does not steal while that process is alive.
+## Supervised control plane
 
-Because every publication renames a **new inode** into place, readers can safely
-cache a parsed record keyed on `(inode, size, mtime)`: a write by any process
-changes the inode. Cached reads serve the polling loop; mutations always read
-uncached, so they never operate on the shared cached object.
+Every supervised peer has a durable runtime record fenced by team, runtime/member identity, owner session, process nonce, owner instance, and owner epoch. The tmux adapter creates a new session with random ownership metadata and records PID, process start token, process group, cwd, runtime identity, and hashes of ownership tokens.
 
-## Presence
+Workers authenticate over a private `0600` Unix socket using bounded, versioned NDJSON. The server tracks all accepted sockets, including unauthenticated ones, so shutdown cannot be held open. Monotonic frame sequences reject replay while allowing a newly loaded worker extension to authenticate with a fresh sequence. Heartbeats and reconnect contact count only after authentication.
 
-Presence lives outside the shared record. Each member rewrites only its own
-`presence/<alias>.json` every two seconds, so heartbeats add no write contention
-and never touch `state.json`.
+The worker watchdog aborts its correlated active request and calls Pi's documented `ctx.shutdown()` when owner contact is lost. Closing the owning session shuts down all owned runtimes in parallel. Reload handoff transfers only same-process, same-session ownership and excludes terminated runtimes.
 
-These files are deliberately non-durable: the atomic rename is kept, both fsyncs
-are not. Presence expires after 30 seconds and is rewritten every 2, so a write
-lost to a crash only makes a member look offline sooner — never alive longer.
-A member is also considered gone as soon as its recorded process has exited. A
-heartbeat never creates a missing parent directory, so one already in flight
-cannot resurrect a team after rename or deletion.
+## Bounded shutdown
 
-## Request lifecycle
+Shutdown is idempotent and follows:
 
-A request is queued, claimed when the recipient is idle, worked on, and settled
-with a result delivered back to the emitter. Once settlement is durable, the
-recipient can accept another team turn; the emitter verifies the result against
-its original request and replies in-thread only if something is missing.
+1. Send authenticated `prepare_shutdown`; the worker aborts only its correlated request and requests graceful Pi shutdown.
+2. Wait a bounded grace period.
+3. Revalidate PID, start token, process group, runtime owner, and token-marked tmux metadata before `SIGTERM`.
+4. Revalidate again before `SIGKILL`.
+5. Remove only a tmux session whose ownership metadata still matches.
 
-States are `pending`, `processing`, `completed`, `interrupted`, and `seen`
-(notes already displayed).
+PID alone is never sufficient. Reuse, changed metadata, corruption, or missing evidence produces `blocked`/`lost` state and diagnostics rather than a speculative signal. `/team kill` uses this same path with stronger human confirmation; there is no unsafe expedited API.
 
-### Optional pi-subagents bridge
+## Dashboard
 
-pi-team publishes the active request root through a process-wide registry at
-`Symbol.for("prjct.agents")`. pi-subagents reads that provider when it admits a
-job, so work delegated during a team request carries the same root id. The
-registry is used instead of a package import because Pi loads extensions through
-separate jiti module graphs, where imported module state would not be shared.
-The provider is optional and the packages remain independently installable.
+`src/ui/team-dashboard.ts` loads one bounded metadata-only snapshot on demand and renders through Pi 0.85.1's documented `ctx.ui.custom` API. It contains team/member status, inbox metadata, a whitelisted runtime projection, request receipts, leases, and shutdown/recovery warnings. Message bodies and process/ownership tokens are excluded.
 
-## Sweeping orphaned claims
+Rendering sanitizes terminal controls, truncates by visible width, pairs status icons with text, and caps each section. Selection stores a stable row/member ID rather than a mutable array index. Escape closes only the view and explicitly does not claim to cancel operations. Non-TUI modes use the same plain formatter.
 
-A session that dies holding a claim would otherwise leave its requester waiting
-forever, so peers interrupt the claim on its behalf and the requester receives an
-`interrupted` result.
+## Legacy preservation and migration
 
-Leaving marks a member offline but retains its address and history so the same
-alias can rejoin. Therefore "someone is offline" is not enough to decide when to
-sweep. A snapshot instead reports `sweepable`, true only when a member the record
-still counts as connected is actually dead **and** still holds a claim, which is
-the only case where sweeping changes anything. Everything else degrades correctly
-without it: rejoining re-admits a stale alias on its own, and displayed status
-comes from presence rather than the record.
+Startup calls `lstat` only to detect the legacy teams and managed-factory roots. It does not traverse them. Importing the legacy modules itself performs no I/O.
 
-## Team and member lifecycle
+Explicit inspection is shallow and bounded by team, entry, file, per-file-byte, and total-byte budgets. It rejects symlinks and unsafe ownership/permissions, opens regular files with `O_NOFOLLOW`, verifies files and directories did not change, and reports metadata without exposing message bodies or tokens. Nested journals, snapshots, worktrees, and arbitrary directories are never traversed.
 
-Lifecycle changes are user-only commands; agents receive no tool that can delete
-or rename identities. Removing a member is allowed only while it is offline. The
-operation removes the roster entry, cancels unresolved work emitted by that alias,
-and turns requests addressed to it into interrupted results for their requesters.
-Renaming rewrites every message endpoint so pending work and history follow the new
-alias. A live session may rename itself; only offline peers can be renamed by
-another member. Ownership tokens fence the old alias after either operation.
+Explicit migration re-inspects the selected legacy mailbox and compares its hash before atomic publication. It rejects destination collisions and overlapping roots. The destination is a closed v2 team metadata archive. Members, messages, receipts, leases, presence, process ownership, journals, snapshots, worktrees, and managed plans are omitted with reasons. Legacy source bytes are never written, moved, or deleted. Legacy stop sends no process signals because old PID fields do not establish the complete v2 ownership proof. A separate human `/team purge` can remove only a closed v2 team after every member has left and every supervised runtime is terminated; it never touches legacy roots.
 
-Team rename and deletion require every recorded member to be offline. They acquire
-stable locks for both names in lexical order, preventing deadlock and fencing
-concurrent joins or publishers. Rename moves the directory first and then writes a
-new revision with the new team name. If the process stops between those steps,
-repeating the same rename recognizes and completes that partial state. Deletion
-first moves the directory to a hidden tombstone and then recursively removes it,
-so readers never observe a partially deleted public team directory.
+The inactive `src/mailbox.ts`, `src/store.ts`, and `src/schema.ts` modules remain only to validate legacy mailbox format during explicit inspection. They are not registered by the extension.
 
-## Context budget
+## Pi APIs
 
-What an extension puts in the model context is paid on every later turn and
-stays in the session branch, so injected values are bounded and any elision is
-stated rather than silent.
+The active integration uses documented Pi 0.85.1 APIs: `registerCommand`, `registerTool`, `registerMessageRenderer`, `sendMessage`, `appendEntry`, `getActiveTools`, `setActiveTools`, `before_agent_start`, `tool_call`, `input`, `agent_settled`, session lifecycle events, `ctx.ui.custom`, notifications/confirmation, `ctx.abort()`, and `ctx.shutdown()`. It imports no host internals and patches no prototypes.
 
-| Carrier | In LLM context | Used for |
-| --- | --- | --- |
-| `before_agent_start` system prompt | yes, every turn | peer rules and team identity, carried exactly once |
-| `sendMessage` content | yes, and it persists | peer messages and review turns |
-| Tool results | yes, and they persist | `team_members`, `team_send`, `team_status` |
-| `appendEntry` | **no**, TUI only | notes, `/team inbox`, sent-message previews |
+## Guarantees and non-goals
 
-Consequences worth knowing:
-
-- Peer rules are **not** repeated inside each message; they arrive once per turn
-  through the system prompt.
-- A delivered result quotes the original request excerpted to 500 characters,
-  with the id kept. Verification of a very long request works from an extract.
-- `team_status` lists are capped and report an `omitted` count. Its
-  `otherTeamWork` list carries only third-party work; anything addressed to or
-  emitted by this session is already in the other lists.
-- Each `team_status` call is a point-in-time snapshot. Earlier results in the
-  same conversation are stale but cannot be retracted, which is why each one is
-  kept small.
-- Teammate discovery, status rosters, `/team members`, and recipient completion
-  omit the current alias. The mailbox independently rejects self-addressed
-  messages, so a stale UI or direct tool call cannot create a self-reply loop.
-
-## Recovery and guarantees
-
-Ownership tokens fence out replaced, renamed, or removed sessions. Pending
-messages survive disconnection and alias/team rename. Claimed work is marked
-interrupted on disconnect or rejoin and is **not automatically replayed**, since
-edits may already have happened.
-
-This favours avoiding duplicate side effects over guaranteed execution. **There is
-no exactly-once guarantee** for filesystem changes or model actions: a crash after
-claiming but before starting also leaves an interrupted task. If storage cannot
-record a result, reception pauses and reports an error.
-
-Reception pauses for one of three reasons, and only one of them is transient.
-The auto-turn cap (`PI_TEAM_AUTO_TURNS`, default 5, `0` to remove) pauses to
-demand a person; typing in the session, `/team resume`, or restarting it all
-supply that and lift the pause, so the cap is never recorded for restoration. An
-explicit `/team pause` and a recovery pause after a takeover, a failed turn, or a
-crash during a task are recorded and do survive a reload.
-
-Membership and pause state are recorded in Pi session entries. Resuming the same
-session rejoins; `/new` and `/fork` do not inherit membership. Before claiming
-work the extension records that restoration must pause, without pausing the live
-session, so an abrupt process death during a task restores paused and requires
-`/team resume`. A crash just before a claim can conservatively require resume too.
-Legacy pending-compaction fields from earlier releases are ignored on restore.
-
-Directory watchers provide prompt delivery; polling every two seconds recovers
-missed notifications. Both run only for joined interactive sessions and close on
-shutdown. Transient storage errors are reported but never pause reception.
-
-## Manual mailbox design decisions and non-goals
-
-Managed teams use the terminal runtime described above. The following choices apply only
-to manually created mailbox teams.
-
-| Concern | Choice |
-| --- | --- |
-| Session creation | The user opens every terminal; nothing is spawned |
-| Discovery | Explicit named teams and aliases, never inferred from directories |
-| Transport | Local filesystem records; no broker, socket server, or daemon |
-| Presence | Per-member files outside the record; heartbeats never lock |
-| Concurrent writes | Compare-and-swap with retry; no team-wide lock |
-| Follow-up | Periodic review turns delegated to the agent, not programmatic retries |
-| Active recipient | Wait until fully idle; no steering between tools |
-| Offline recipient | Persist to a known alias until it rejoins |
-| Approval | Never supplied by peers; local policies always win |
-| Coordination | Direct messages and bulk check-ins; no task board, automatic compaction, or worktree manager |
-| Scope | Local disks only: no network filesystems, cross-machine transport, or native Windows |
-
-Not provided: file ownership between agents, a sandbox, an authorization system,
-or protection of secrets from other processes under the same OS user.
-
-## Pi interfaces used
-
-`registerCommand`, `registerTool`, `sendMessage`, `appendEntry`, custom entry and
-message renderers, `setWidget`, `getEditorText`, `confirm`, `isIdle`,
-`hasPendingMessages`, session lifecycle events, UI prompt events, `tool_result`,
-`message_end`, and `agent_settled`. All public and documented; no host internals
-are imported, no prototypes patched, and peer text is never shell-evaluated or
-expanded as file mentions.
+pi-team provides local durable coordination, bounded recovery, and conservative process ownership checks. It does not provide exactly-once side effects, a sandbox, an authorization boundary, Git integration, automatic planning, worktree allocation, publication, deployment, cross-machine transport, network-filesystem support, or native Windows support.

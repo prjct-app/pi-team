@@ -98,6 +98,14 @@ test('membership presence fences replaced generations and preserves one offline 
     'A replacement cannot consume work targeted at the previous online generation');
 });
 
+test('a failed outgoing cancellation retains durable membership ownership', async (t) => {
+  const runtime = await setup(t);
+  const member = await runtime.join('lead');
+  t.mock.method(runtime.requests, 'cancelOutgoing', async () => { throw new Error('injected cancellation failure'); });
+  await assert.rejects(runtime.requests.leave(member), /injected cancellation failure/);
+  assert.equal((await runtime.memberships.assertOwner(member)).state, 'active');
+});
+
 test('offline requests are delivered after rejoin and require an explicit correlated reply', async (t) => {
   const runtime = await setup(t);
   const pm = await runtime.join('pm');
@@ -120,6 +128,21 @@ test('offline requests are delivered after rejoin and require an explicit correl
   assert.equal(received.discarded, false);
   assert.equal(received.message?.body, 'Contract reviewed.');
   assert.equal(await runtime.delivery.inboxItems(pm).then(result => result.items.length), 0);
+});
+
+test('an active delivery claim can be token-fenced and renewed beyond its original lease', async (t) => {
+  const runtime = await setup(t);
+  const pm = await runtime.join('pm');
+  const backend = await runtime.join('backend');
+  const request = await runtime.requests.send(pm, { to: 'backend', kind: 'request', body: 'Take enough time to verify this.' });
+  const original = await runtime.delivery.claim(backend, request.messageId);
+  await runtime.requests.read(backend, request.messageId);
+  runtime.setNow(BASE + 900);
+  const renewed = await runtime.delivery.renew(backend, request.messageId);
+  assert.equal(renewed.token, original.token);
+  assert.equal(renewed.generation, original.generation);
+  runtime.setNow(BASE + 1_500);
+  assert.equal((await runtime.requests.reply(backend, request.messageId, 'Verified after renewal.')).accepted, true);
 });
 
 test('sender cancellation is durable and a late reply is discarded', async (t) => {

@@ -331,16 +331,9 @@ export class RequestService {
   }
 
   async leave(membership: Membership): Promise<number> {
-    return this.cancelOutgoing(membership).then(
-      async cancelled => {
-        await this.memberships.leave(membership);
-        return cancelled;
-      },
-      async error => {
-        await this.memberships.leave(membership);
-        throw error;
-      },
-    );
+    const cancelled = await this.cancelOutgoing(membership);
+    await this.memberships.leave(membership);
+    return cancelled;
   }
 
   async cancelOutgoing(membership: Membership): Promise<number> {

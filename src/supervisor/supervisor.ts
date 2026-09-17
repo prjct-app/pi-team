@@ -15,6 +15,7 @@ import {
   RuntimeStore, sameOwner, type OwnerIdentity, type OwnedRuntime,
 } from './runtime-store.ts';
 import { TmuxAdapter, type TmuxLaunchOptions } from './tmux-adapter.ts';
+import type { Membership } from '../runtime/membership.ts';
 
 const PROCESS_NONCE = Symbol.for('prjct.pi-team.owner-process-nonce');
 
@@ -47,6 +48,8 @@ export type SupervisorLaunch = {
   readonly memberId: string;
   readonly cwd: string;
   readonly command: readonly [string, ...string[]];
+  readonly workerMembership: Membership;
+  readonly autoRequests: boolean;
 };
 
 export type SupervisorHandoff = {
@@ -209,7 +212,10 @@ class ControlHub {
                 frame.ownerProcessNonce !== this.owner().ownerProcessNonce) {
               throw Object.assign(new Error('Worker control authentication failed.'), { code: 'FENCED' });
             }
-            if (frame.seq <= state.lastWorkerSeq) throw Object.assign(new Error('Worker hello sequence is stale.'), { code: 'FENCED' });
+            if (state.authenticated && frame.seq <= state.lastWorkerSeq) {
+              throw Object.assign(new Error('Worker hello sequence is stale.'), { code: 'FENCED' });
+            }
+            if (!state.authenticated) state.lastWorkerSeq = 0;
             state.socket?.destroy();
             state.socket = socket;
             state.authenticated = true;
@@ -442,6 +448,8 @@ export class TeamSupervisor {
       controlSocket: this.socketPath,
       controlToken,
       ownershipToken,
+      workerMembership: input.workerMembership,
+      autoRequests: input.autoRequests,
     };
     const process = await this.tmux.launch(launch).catch(error => {
       this.hub.unregister(runtimeId);
@@ -559,8 +567,6 @@ export class TeamSupervisor {
   async prepareHandoff(): Promise<SupervisorHandoff> {
     await this.start();
     if (this.closed || this.handedOff) throw new Error('Supervisor cannot hand off twice.');
-    this.handedOff = true;
-    this.closed = true;
     const to: OwnerIdentity = {
       ...this.ownerValue,
       ownerInstanceId: randomUUID(),
@@ -574,6 +580,8 @@ export class TeamSupervisor {
       runtimes: this.hub.snapshots(),
     };
     await this.hub.stop();
+    this.handedOff = true;
+    this.closed = true;
     return handoff;
   }
 
@@ -612,10 +620,19 @@ export class TeamSupervisor {
     this.closed = true;
     const cleanup = (async () => {
       try {
-        if (!this.handedOff) await this.stopAll('close');
+        if (!this.handedOff) {
+          const outcomes = await this.stopAll('close');
+          const blocked = outcomes.filter(outcome => outcome.status === 'blocked');
+          if (blocked.length > 0) {
+            throw new Error(`Supervisor shutdown blocked for ${blocked.length} runtime(s).`);
+          }
+        }
       } finally { await this.hub.stop(); }
     })();
-    this.closePromise = cleanup;
-    return cleanup;
+    this.closePromise = cleanup.catch(error => {
+      this.closePromise = undefined;
+      throw error;
+    });
+    return this.closePromise;
   }
 }

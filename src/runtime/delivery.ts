@@ -207,6 +207,21 @@ export class DeliveryService {
     });
   }
 
+  async renew(membership: Membership, messageId: string): Promise<DeliveryClaim> {
+    return withStorageLock(this.lockPath(membership.teamId, messageId), async () => {
+      const lease = await this.ownedLease(membership, messageId);
+      const renewed = await this.leases.renew(
+        membership.teamId,
+        lease.leaseId,
+        this.holderId(membership),
+        lease.token,
+        lease.generation,
+        this.leaseMs,
+      );
+      return this.claimFromLease(membership, messageId, renewed);
+    });
+  }
+
   async release(membership: Membership, messageId: string): Promise<void> {
     await withStorageLock(this.lockPath(membership.teamId, messageId), async () => {
       const lease = await this.ownedLease(membership, messageId);
