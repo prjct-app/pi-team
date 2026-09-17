@@ -1,32 +1,27 @@
 ## Unreleased
 
-- Create every managed peer as a persistent, user-attachable tmux Pi terminal with durable mailbox communication.
-- Discover existing teams for the current repository before creation, queue cross-session objectives, and provide repository-wide plan monitoring.
-- Add `/team terminal` plus audited pause, resume, cancel, retry, reassign, and unblock controls.
-- Show the live managed Team Plan automatically below the editor with native Pi UI, and use a non-floating detailed view.
-- Allow an active factory plan to accept additional dependency-aware work batches while the lead keeps conversing; persistent peers process repeated tasks and idle peers run concurrently.
-- Keep the lead orchestration-only by blocking repository research and mutation tools outside explicitly approved publication gates.
-- Reduce top-level `/team` completion to the primary `plan` and `approve` operations while retaining manual-mailbox compatibility.
+### Breaking changes
+
+- replace the v1 managed factory and automatic prompt interception with explicit Team v2 commands
+- remove managed plans, automatic worktrees, schedulers, publication gates, and the old factory tools
+- move active state to independent Team v2 records under `${PRJCT_HOME:-~/.prjct}/pi-team/`
 
 ### Features
 
-- add the staged Team v2 domain and independent atomic stores for teams, members, inboxes, receipts, and token-fenced leases
-- add staged Team v2 membership, offline messaging, correlated requests, durable cancellation, presence, reconciliation, and a dynamically activated compact model tool
-- add the staged Team v2 supervised-peer control protocol, watchdog, reload handoff, runtime reconciliation, and bounded process shutdown
-- start autonomous managed teams from normal implementation prompts
-- isolate persistent peer sessions in dedicated branches and worktrees
-- add dependency scheduling, recovery, reassignment, local integration, verification, and corrective jobs
-- add the live clickable Team Plan TUI and bounded structured activity journals
-- add separate user-only publication and ship approval gates
+- integrate Team v2 membership, presence, durable messaging, correlated requests/replies, cancellation, reconciliation, and advisory resource leases
+- add explicit supervised-peer start/stop/close commands with authenticated worker control, watchdogs, reload handoff, and bounded identity-fenced shutdown
+- dynamically activate one compact non-destructive `team` model tool only while membership is active
+- add an on-demand bounded Team dashboard with a headless formatter and stable-ID selection
+- add explicit bounded legacy inspection and conservative closed-metadata migration while preserving all source bytes
 
 ### Security
 
-- reject unsafe Team v2 paths and records, enforce bounded TTL/quotas, and preserve legacy data without traversing or migrating it
-- fence replaced Team v2 member and delivery owners, discard late replies, and never automatically replay a delivered request after failure
-- authenticate bounded worker control sockets and revalidate owner, tmux, PID, start-token, and process-group identity before supervisor escalation
-- validate worktree repository ownership and full integration commit ids
-- sanitize persisted activity and keep push, PR, merge, release, and deploy behind explicit human gates
-- await owner-fenced managed runtime shutdown and terminate only token-verified tmux sessions with revalidated process identity
+- never automatically wake or terminate external peers
+- require human confirmation for destructive lifecycle, process, and migration actions
+- reject symlinks and corrupt/future records, enforce quotas and TTLs, and fence owners with tokens, generations, and epochs
+- revalidate PID start token, process group, runtime owner, and tmux ownership metadata before every shutdown escalation
+- never automatically replay work after model exposure, and reject late replies to terminal requests
+- keep legacy managed plans, journals, snapshots, worktrees, and weak process evidence inspection-only
 
 ## [0.5.7](https://github.com/prjct-app/pi-team/compare/v0.5.6...v0.5.7) (2026-09-10)
 

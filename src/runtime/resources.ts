@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import { leaseExpired, sameLeaseOwner, type Lease } from '../domain/lease.ts';
 import { MAX_MESSAGE_TTL_MS } from '../domain/message.ts';
 import { LeaseStore } from '../storage/lease-store.ts';
@@ -32,6 +33,13 @@ export class ResourceLeaseService {
     }
   }
 
+  private canonicalResource(membership: Membership, resourceId: string): string {
+    this.assertResource(resourceId);
+    const canonical = resolve(membership.cwd, resourceId);
+    if (Buffer.byteLength(canonical, 'utf8') > 4096) throw new Error('Canonical resource path exceeds 4096 UTF-8 bytes.');
+    return canonical;
+  }
+
   private async current(
     membership: Membership,
     resourceId: string,
@@ -56,15 +64,15 @@ export class ResourceLeaseService {
   ): Promise<Lease> {
     await this.memberships.assertOwner(membership);
     signal?.throwIfAborted();
-    this.assertResource(resourceId);
+    const canonical = this.canonicalResource(membership, resourceId);
     if (!Number.isFinite(ttlMs) || ttlMs <= 0 || ttlMs > MAX_MESSAGE_TTL_MS) throw new Error('Invalid resource lease TTL.');
     signal?.throwIfAborted();
     return this.leases.acquire({
       teamId: membership.teamId,
-      leaseId: this.leaseId(resourceId),
+      leaseId: this.leaseId(canonical),
       kind: 'resource',
       holderId: this.holderId(membership),
-      resourceId,
+      resourceId: canonical,
       ttlMs,
     });
   }
@@ -76,7 +84,8 @@ export class ResourceLeaseService {
     generation: number,
     ttlMs = DEFAULT_RESOURCE_LEASE_MS,
   ): Promise<Lease> {
-    const lease = await this.current(membership, resourceId, token, generation);
+    const canonical = this.canonicalResource(membership, resourceId);
+    const lease = await this.current(membership, canonical, token, generation);
     return this.leases.renew(
       membership.teamId,
       lease.leaseId,
@@ -94,7 +103,8 @@ export class ResourceLeaseService {
     generation: number,
     signal?: AbortSignal,
   ): Promise<void> {
-    const lease = await this.current(membership, resourceId, token, generation);
+    const canonical = this.canonicalResource(membership, resourceId);
+    const lease = await this.current(membership, canonical, token, generation);
     signal?.throwIfAborted();
     await this.leases.release(
       membership.teamId,

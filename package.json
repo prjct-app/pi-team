@@ -1,7 +1,7 @@
 {
   "name": "@prjct.app/pi-team",
   "version": "0.5.7",
-  "description": "Run autonomous persistent Pi teams in isolated Git worktrees, with live plans and human publication gates.",
+  "description": "Coordinate explicit local Pi teams with durable messaging and safely supervised peers.",
   "type": "module",
   "keywords": [
     "pi-package",

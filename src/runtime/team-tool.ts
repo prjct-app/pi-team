@@ -29,6 +29,7 @@ export const TeamToolParameters = Type.Object({
 
 export type TeamToolRuntime = {
   readonly membership: Membership;
+  readonly enqueue?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly memberships: MembershipService;
   readonly delivery: DeliveryService;
   readonly requests: RequestService;
@@ -37,6 +38,11 @@ export type TeamToolRuntime = {
 
 export type TeamToolController = {
   readonly sync: () => void;
+};
+
+type TeamToolResult = {
+  readonly content: { readonly type: 'text'; readonly text: string }[];
+  readonly details: unknown;
 };
 
 type TeamToolInput = {
@@ -89,79 +95,87 @@ export function registerTeamTool(
       signal?.throwIfAborted();
       const current = runtime();
       if (!current) throw new Error('This session is not joined to a Team.');
-      const membership = current.membership;
-      if (input.action === 'peers') {
-        const peers = await current.memberships.peerPage(membership, input.limit ?? 50, input.cursor);
-        return { content: [{ type: 'text', text: JSON.stringify(peers) }], details: peers };
-      }
-      if (input.action === 'inbox') {
-        const inbox = await current.delivery.inboxItems(membership, input.limit ?? 50, input.cursor);
-        return { content: [{ type: 'text', text: JSON.stringify(inbox) }], details: inbox };
-      }
-      if (input.action === 'status') {
-        const [peers, inbox] = await Promise.all([
-          current.memberships.peerPage(membership, input.limit ?? 50),
-          current.delivery.inboxItems(membership, input.limit ?? 50),
-        ]);
-        const status = {
-          teamId: membership.teamId,
-          memberId: membership.memberId,
-          alias: membership.alias,
-          generation: membership.memberGeneration,
-          peers: peers.peers,
-          inbox: inbox.items,
-          omitted: peers.nextCursor !== undefined || inbox.nextCursor !== undefined,
+      const perform = async (): Promise<TeamToolResult> => {
+        const membership = current.membership;
+        if (input.action === 'peers') {
+          const peers = await current.memberships.peerPage(membership, input.limit ?? 50, input.cursor);
+          return { content: [{ type: 'text', text: JSON.stringify(peers) }], details: peers };
+        }
+        if (input.action === 'inbox') {
+          const inbox = await current.delivery.inboxItems(membership, input.limit ?? 50, input.cursor);
+          return { content: [{ type: 'text', text: JSON.stringify(inbox) }], details: inbox };
+        }
+        if (input.action === 'status') {
+          const [peers, inbox] = await Promise.all([
+            current.memberships.peerPage(membership, input.limit ?? 50),
+            current.delivery.inboxItems(membership, input.limit ?? 50),
+          ]);
+          const status = {
+            teamId: membership.teamId,
+            memberId: membership.memberId,
+            alias: membership.alias,
+            generation: membership.memberGeneration,
+            peers: peers.peers,
+            inbox: inbox.items,
+            omitted: peers.nextCursor !== undefined || inbox.nextCursor !== undefined,
+          };
+          return { content: [{ type: 'text', text: JSON.stringify(status) }], details: status };
+        }
+        if (input.action === 'claim') {
+          const resource = required(input.resource, 'resource');
+          const claim = await current.resources.claim(
+            membership,
+            resource,
+            input.ttlSeconds === undefined ? undefined : input.ttlSeconds * 1_000,
+            signal,
+          );
+          const details = {
+            resource: claim.resourceId,
+            token: claim.token,
+            generation: claim.generation,
+            expiresAt: claim.expiresAt,
+          };
+          return { content: [{ type: 'text', text: JSON.stringify(details) }], details };
+        }
+        if (input.action === 'read') {
+          const result = await current.requests.receive(membership, required(input.messageId, 'messageId'), signal);
+          const text = result.discarded ? 'Late reply discarded because its request is terminal.' : JSON.stringify(result.message);
+          return { content: [{ type: 'text', text }], details: result };
+        }
+        if (input.action === 'release') {
+          const resource = required(input.resource, 'resource');
+          await current.resources.release(
+            membership,
+            resource,
+            required(input.claimToken, 'claimToken'),
+            requiredGeneration(input.claimGeneration),
+            signal,
+          );
+          return { content: [{ type: 'text', text: `Released resource ${resource}.` }], details: { resource } };
+        }
+        if (input.action === 'reply') {
+          const result = await current.requests.reply(
+            membership,
+            required(input.messageId, 'messageId'),
+            required(input.body, 'body'),
+            signal,
+          );
+          return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
+        }
+        const sent = await current.requests.send(membership, {
+          to: required(input.to, 'to'),
+          kind: required(input.kind, 'kind') as Exclude<MessageKind, 'reply' | 'cancel'>,
+          body: required(input.body, 'body'),
+          ...(input.threadId ? { threadId: input.threadId } : {}),
+          ...(input.ttlSeconds ? { ttlMs: input.ttlSeconds * 1_000 } : {}),
+          ...(signal ? { signal } : {}),
+        });
+        return {
+          content: [{ type: 'text', text: `Queued ${sent.kind} ${sent.messageId} for ${input.to}.` }],
+          details: { messageId: sent.messageId, requestId: sent.requestId, threadId: sent.threadId },
         };
-        return { content: [{ type: 'text', text: JSON.stringify(status) }], details: status };
-      }
-      if (input.action === 'claim') {
-        const resource = required(input.resource, 'resource');
-        const claim = await current.resources.claim(
-          membership,
-          resource,
-          input.ttlSeconds === undefined ? undefined : input.ttlSeconds * 1_000,
-          signal,
-        );
-        const details = { resource, token: claim.token, generation: claim.generation, expiresAt: claim.expiresAt };
-        return { content: [{ type: 'text', text: JSON.stringify(details) }], details };
-      }
-      if (input.action === 'read') {
-        const result = await current.requests.receive(membership, required(input.messageId, 'messageId'), signal);
-        const text = result.discarded ? 'Late reply discarded because its request is terminal.' : JSON.stringify(result.message);
-        return { content: [{ type: 'text', text }], details: result };
-      }
-      if (input.action === 'release') {
-        const resource = required(input.resource, 'resource');
-        await current.resources.release(
-          membership,
-          resource,
-          required(input.claimToken, 'claimToken'),
-          requiredGeneration(input.claimGeneration),
-          signal,
-        );
-        return { content: [{ type: 'text', text: `Released resource ${resource}.` }], details: { resource } };
-      }
-      if (input.action === 'reply') {
-        const result = await current.requests.reply(
-          membership,
-          required(input.messageId, 'messageId'),
-          required(input.body, 'body'),
-          signal,
-        );
-        return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
-      }
-      const sent = await current.requests.send(membership, {
-        to: required(input.to, 'to'),
-        kind: required(input.kind, 'kind') as Exclude<MessageKind, 'reply' | 'cancel'>,
-        body: required(input.body, 'body'),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-        ...(input.ttlSeconds ? { ttlMs: input.ttlSeconds * 1_000 } : {}),
-        ...(signal ? { signal } : {}),
-      });
-      return {
-        content: [{ type: 'text', text: `Queued ${sent.kind} ${sent.messageId} for ${input.to}.` }],
-        details: { messageId: sent.messageId, requestId: sent.requestId, threadId: sent.threadId },
       };
+      return current.enqueue ? current.enqueue(perform) : perform();
     },
   });
 

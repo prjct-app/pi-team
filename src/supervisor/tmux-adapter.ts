@@ -12,6 +12,14 @@ const ENV_RUNTIME_ID = 'PI_TEAM_RUNTIME_ID';
 const ENV_OWNER_INSTANCE = 'PI_TEAM_OWNER_INSTANCE';
 const ENV_OWNER_PROCESS_NONCE = 'PI_TEAM_OWNER_PROCESS_NONCE';
 const ENV_TOKEN_HASH = 'PI_TEAM_TOKEN_HASH';
+const ENV_TEAM_ID = 'PI_TEAM_TEAM_ID';
+const ENV_MEMBER_ID = 'PI_TEAM_MEMBER_ID';
+const ENV_MEMBER_ALIAS = 'PI_TEAM_MEMBER_ALIAS';
+const ENV_MEMBER_SESSION = 'PI_TEAM_MEMBER_SESSION';
+const ENV_MEMBER_GENERATION = 'PI_TEAM_MEMBER_GENERATION';
+const ENV_MEMBER_LEASE_TOKEN = 'PI_TEAM_MEMBER_LEASE_TOKEN';
+const ENV_MEMBER_LEASE_GENERATION = 'PI_TEAM_MEMBER_LEASE_GENERATION';
+const ENV_AUTO_REQUESTS = 'PI_TEAM_AUTO_REQUESTS';
 const ENV_CONTROL_SOCKET = 'PI_TEAM_CONTROL_SOCKET';
 const ENV_CONTROL_TOKEN = 'PI_TEAM_CONTROL_TOKEN';
 
@@ -32,6 +40,16 @@ export type TmuxLaunchOptions = {
   readonly controlSocket: string;
   readonly controlToken: string;
   readonly ownershipToken: string;
+  readonly workerMembership: {
+    readonly teamId: string;
+    readonly memberId: string;
+    readonly alias: string;
+    readonly sessionId: string;
+    readonly memberGeneration: number;
+    readonly leaseToken: string;
+    readonly leaseGeneration: number;
+  };
+  readonly autoRequests: boolean;
 };
 
 const defaultCommand: TmuxCommand = (program, args, cwd) => new Promise((resolvePromise, reject) => {
@@ -81,6 +99,14 @@ export class TmuxAdapter {
       '-e', `${ENV_OWNER_INSTANCE}=${options.owner.ownerInstanceId}`,
       '-e', `${ENV_OWNER_PROCESS_NONCE}=${options.owner.ownerProcessNonce}`,
       '-e', `${ENV_TOKEN_HASH}=${tokenHash}`,
+      '-e', `${ENV_TEAM_ID}=${options.workerMembership.teamId}`,
+      '-e', `${ENV_MEMBER_ID}=${options.workerMembership.memberId}`,
+      '-e', `${ENV_MEMBER_ALIAS}=${options.workerMembership.alias}`,
+      '-e', `${ENV_MEMBER_SESSION}=${options.workerMembership.sessionId}`,
+      '-e', `${ENV_MEMBER_GENERATION}=${options.workerMembership.memberGeneration}`,
+      '-e', `${ENV_MEMBER_LEASE_TOKEN}=${options.workerMembership.leaseToken}`,
+      '-e', `${ENV_MEMBER_LEASE_GENERATION}=${options.workerMembership.leaseGeneration}`,
+      '-e', `${ENV_AUTO_REQUESTS}=${options.autoRequests ? '1' : '0'}`,
       '-e', `${ENV_CONTROL_SOCKET}=${options.controlSocket}`,
       '-e', `${ENV_CONTROL_TOKEN}=${options.controlToken}`,
       '--', ...options.command,

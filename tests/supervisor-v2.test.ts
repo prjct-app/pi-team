@@ -8,7 +8,7 @@ import { test, type TestContext } from 'node:test';
 import type { Member } from '../src/domain/member.ts';
 import type { Team } from '../src/domain/team.ts';
 import type { ProcessController, ProcessIdentity } from '../src/process-identity.ts';
-import { TeamSupervisor, type SupervisorOptions } from '../src/supervisor/supervisor.ts';
+import { TeamSupervisor, type SupervisorLaunch, type SupervisorOptions } from '../src/supervisor/supervisor.ts';
 import type { OwnerIdentity, OwnedRuntime } from '../src/supervisor/runtime-store.ts';
 import { RuntimeStore } from '../src/supervisor/runtime-store.ts';
 import { TmuxAdapter, type TmuxCommand, type TmuxLaunchOptions } from '../src/supervisor/tmux-adapter.ts';
@@ -127,6 +127,30 @@ async function setup(t: TestContext): Promise<Fixture> {
   };
 }
 
+function launchInput(
+  memberId = 'backend-1',
+  cwd = '/repo/backend',
+  command: readonly [string, ...string[]] = ['pi'],
+): SupervisorLaunch {
+  return {
+    memberId,
+    cwd,
+    command,
+    workerMembership: {
+      teamId: 'shop',
+      memberId,
+      memberGeneration: 1,
+      leaseToken: 'a'.repeat(64),
+      leaseGeneration: 1,
+      alias: memberId === 'external-1' ? 'external' : 'backend',
+      sessionId: `${memberId}-session`,
+      cwd,
+      kind: 'supervised',
+    },
+    autoRequests: true,
+  };
+}
+
 function workerFromLaunch(
   launch: TmuxLaunchOptions,
   hooks: { abort(requestId: string): void; shutdown(reason: 'stop' | 'close' | 'reload_failed' | 'owner_lost'): void },
@@ -150,7 +174,7 @@ test('supervisor authenticates a worker, tracks requests, cancels exactly one re
     shutdownTimings: { gracefulMs: 100, termMs: 0, killMs: 0, pollMs: 10 },
   });
   t.after(() => supervisor.close());
-  const runtime = await supervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi', '--no-extensions'] });
+  const runtime = await supervisor.launch(launchInput('backend-1', '/repo/backend', ['pi', '--no-extensions']));
   const aborted: string[] = [];
   const shutdown: string[] = [];
   const worker = workerFromLaunch(fixture.tmux.launchOptions!, {
@@ -195,7 +219,7 @@ test('external members are never launched or terminated by the supervisor', asyn
     updatedAt: timestamp,
   });
   const supervisor = new TeamSupervisor(fixture.options);
-  await assert.rejects(supervisor.launch({ memberId: 'external-1', cwd: '/repo/external', command: ['pi'] }),
+  await assert.rejects(supervisor.launch(launchInput('external-1', '/repo/external')),
     (error: unknown) => (error as { code?: string }).code === 'FENCED');
   assert.equal(fixture.tmux.launchOptions, undefined);
   assert.deepEqual(fixture.processes.signals, []);
@@ -206,7 +230,7 @@ test('shutdown escalates TERM to KILL and refuses signals after tmux ownership c
   const fixture = await setup(t);
   fixture.processes.terminateOn = 'SIGKILL';
   const supervisor = new TeamSupervisor(fixture.options);
-  const runtime = await supervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  const runtime = await supervisor.launch(launchInput());
   const stopped = await supervisor.stop(runtime.runtimeId);
   assert.equal(stopped.status, 'terminated');
   assert.deepEqual(fixture.processes.signals, ['SIGTERM', 'SIGKILL']);
@@ -215,18 +239,18 @@ test('shutdown escalates TERM to KILL and refuses signals after tmux ownership c
   const blockedFixture = await setup(t);
   blockedFixture.tmux.metadata = false;
   const blockedSupervisor = new TeamSupervisor(blockedFixture.options);
-  const blockedRuntime = await blockedSupervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  const blockedRuntime = await blockedSupervisor.launch(launchInput());
   const blocked = await blockedSupervisor.stop(blockedRuntime.runtimeId);
   assert.equal(blocked.status, 'blocked');
   assert.deepEqual(blockedFixture.processes.signals, []);
   assert.equal((await blockedFixture.runtimes.read('shop', blockedRuntime.runtimeId))?.state, 'lost');
-  await blockedSupervisor.close();
+  await assert.rejects(blockedSupervisor.close(), /shutdown blocked/);
 });
 
 test('PID reuse is treated as original-process exit and is never signalled', async (t) => {
   const fixture = await setup(t);
   const supervisor = new TeamSupervisor(fixture.options);
-  const runtime = await supervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  const runtime = await supervisor.launch(launchInput());
   fixture.processes.identity = { processPid: runtime.processPid, processStartToken: 'reused', processGroupId: runtime.processGroupId! };
   const stopped = await supervisor.stop(runtime.runtimeId);
   assert.equal(stopped.status, 'terminated');
@@ -237,19 +261,19 @@ test('PID reuse is treated as original-process exit and is never signalled', asy
 test('reconciliation keeps verified owned runtimes and blocks cleanup after metadata changes', async (t) => {
   const fixture = await setup(t);
   const supervisor = new TeamSupervisor(fixture.options);
-  const runtime = await supervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  const runtime = await supervisor.launch(launchInput());
   assert.deepEqual(await supervisor.reconcile(), [{ runtimeId: runtime.runtimeId, status: 'owned' }]);
   assert.equal((await fixture.runtimes.read('shop', runtime.runtimeId))?.owner.ownerEpoch, supervisor.owner.ownerEpoch);
   fixture.tmux.metadata = false;
   assert.deepEqual(await supervisor.reconcile(), [{ runtimeId: runtime.runtimeId, status: 'lost' }]);
   assert.deepEqual(fixture.processes.signals, []);
-  await supervisor.close();
+  await assert.rejects(supervisor.close(), /shutdown blocked/);
 });
 
 test('reload handoff works only inside the same owner process and does not stop workers', async (t) => {
   const fixture = await setup(t);
   const original = new TeamSupervisor(fixture.options);
-  const runtime = await original.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  const runtime = await original.launch(launchInput());
   const shutdown: string[] = [];
   const worker = workerFromLaunch(fixture.tmux.launchOptions!, {
     abort() {},
@@ -282,15 +306,34 @@ test('reload handoff works only inside the same owner process and does not stop 
   await assert.rejects(foreign.adopt(handoff), (error: unknown) => (error as { code?: string }).code === 'FENCED');
   await foreign.close();
 
+  fixture.processes.terminateOn = 'SIGTERM';
   await replacement.close();
   assert.deepEqual(shutdown, ['close']);
   await original.close();
 });
 
+test('a supervised worker extension can reconnect with a fresh frame sequence after reload', async (t) => {
+  const fixture = await setup(t);
+  const supervisor = new TeamSupervisor(fixture.options);
+  const runtime = await supervisor.launch(launchInput());
+  const hooks = { abort() {}, shutdown() {} };
+  const first = workerFromLaunch(fixture.tmux.launchOptions!, hooks);
+  await first.start();
+  await until(async () => (await fixture.runtimes.read('shop', runtime.runtimeId))?.state === 'ready');
+  first.stop();
+  const replacement = workerFromLaunch(fixture.tmux.launchOptions!, hooks);
+  t.after(() => replacement.stop());
+  await replacement.start();
+  replacement.busy('reload-request');
+  await until(async () => (await fixture.runtimes.read('shop', runtime.runtimeId))?.activeRequestId === 'reload-request');
+  fixture.processes.identity = undefined;
+  await supervisor.close();
+});
+
 test('a worker watchdog shuts down after reload handoff is abandoned even when request abort fails', async (t) => {
   const fixture = await setup(t);
   const supervisor = new TeamSupervisor(fixture.options);
-  await supervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  await supervisor.launch(launchInput());
   const shutdown: string[] = [];
   const worker = workerFromLaunch(fixture.tmux.launchOptions!, {
     abort() { throw new Error('abort failed'); },
@@ -359,7 +402,7 @@ test('terminated runtimes are excluded from reload handoff', async (t) => {
   const fixture = await setup(t);
   fixture.processes.terminateOn = 'SIGTERM';
   const supervisor = new TeamSupervisor(fixture.options);
-  const runtime = await supervisor.launch({ memberId: 'backend-1', cwd: '/repo/backend', command: ['pi'] });
+  const runtime = await supervisor.launch(launchInput());
   assert.equal((await supervisor.stop(runtime.runtimeId)).status, 'terminated');
   const handoff = await supervisor.prepareHandoff();
   assert.deepEqual(handoff.runtimes, []);
@@ -402,6 +445,7 @@ test('tmux adapter marks ownership and refuses to kill after metadata tampering'
   const launched = await adapter.launch({
     runtimeId: 'runtime-tmux', owner, cwd: '/repo/backend', command: ['pi'], controlSocket: '/tmp/control.sock',
     controlToken: 'a'.repeat(64), ownershipToken: 'b'.repeat(64),
+    workerMembership: launchInput().workerMembership, autoRequests: true,
   });
   const runtime: OwnedRuntime = {
     schemaVersion: 2, runtimeId: 'runtime-tmux', teamId: 'shop', memberId: 'backend-1', owner,
@@ -434,6 +478,7 @@ test('tmux launch cleans a partially marked session only with matching environme
   await assert.rejects(adapter.launch({
     runtimeId: 'runtime-partial', owner, cwd: '/repo/backend', command: ['pi'], controlSocket: '/tmp/control.sock',
     controlToken: 'a'.repeat(64), ownershipToken: 'b'.repeat(64),
+    workerMembership: launchInput().workerMembership, autoRequests: true,
   }), /metadata write failed/);
   assert.equal(calls.some(args => args[0] === 'kill-session'), true);
 });

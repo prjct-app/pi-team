@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Member, MemberKind } from '../domain/member.ts';
-import { assertTeamId } from '../domain/team.ts';
+import { assertEntityId, assertTeamId } from '../domain/team.ts';
 import { withStorageLock } from '../storage/atomic.ts';
 import { TeamPaths } from '../storage/paths.ts';
 import { TeamStore } from '../storage/team-store.ts';
@@ -25,6 +25,42 @@ export type PeerPage = {
   readonly peers: readonly PeerStatus[];
   readonly nextCursor?: string;
 };
+
+function positiveInteger(value: string | undefined, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`Invalid ${label} in supervised Team environment.`);
+  return parsed;
+}
+
+export function workerMembershipFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd(),
+): Membership | undefined {
+  const names = [
+    'PI_TEAM_TEAM_ID', 'PI_TEAM_MEMBER_ID', 'PI_TEAM_MEMBER_ALIAS', 'PI_TEAM_MEMBER_SESSION',
+    'PI_TEAM_MEMBER_GENERATION', 'PI_TEAM_MEMBER_LEASE_TOKEN', 'PI_TEAM_MEMBER_LEASE_GENERATION',
+  ] as const;
+  const present = names.filter(name => environment[name] !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length !== names.length) throw new Error('Incomplete supervised Team membership environment.');
+  const teamId = assertTeamId(environment.PI_TEAM_TEAM_ID!);
+  const memberId = assertEntityId(environment.PI_TEAM_MEMBER_ID!, 'member ID');
+  const alias = assertTeamId(environment.PI_TEAM_MEMBER_ALIAS!);
+  const sessionId = assertEntityId(environment.PI_TEAM_MEMBER_SESSION!, 'session ID');
+  const leaseToken = environment.PI_TEAM_MEMBER_LEASE_TOKEN!;
+  if (!/^[a-f0-9]{64}$/.test(leaseToken)) throw new Error('Invalid supervised Team membership environment.');
+  return {
+    teamId,
+    memberId,
+    memberGeneration: positiveInteger(environment.PI_TEAM_MEMBER_GENERATION, 'member generation'),
+    leaseToken,
+    leaseGeneration: positiveInteger(environment.PI_TEAM_MEMBER_LEASE_GENERATION, 'lease generation'),
+    alias,
+    sessionId,
+    cwd,
+    kind: 'supervised',
+  };
+}
 
 export class MembershipService {
   constructor(
