@@ -90,9 +90,9 @@ lead `edit` and `write` remain blocked.
 
 ## Team v2 core (staged)
 
-The replacement core is implemented under `src/domain/`, `src/storage/`, and `src/runtime/`,
-but is deliberately not connected to the extension until the supervisor and command phases
-land. It uses `${PRJCT_HOME:-~/.prjct}/pi-team/` and separates team metadata, members,
+The replacement core is implemented under `src/domain/`, `src/storage/`, `src/runtime/`, and
+`src/supervisor/`, but is deliberately not connected to the extension until the command phase
+lands. It uses `${PRJCT_HOME:-~/.prjct}/pi-team/` and separates team metadata, members,
 inbox envelopes, receipts, and leases into independent bounded records. The active v1
 runtime described below continues to use its existing paths during this transition.
 
@@ -129,6 +129,21 @@ A single compact `team` model tool is prepared for dynamic activation. It suppor
 Lifecycle, migration, purge, and process controls remain human-only. The tool and its system-prompt
 rules are active only while a session owns a membership. The staged controller is not yet
 registered by the active v1 extension.
+
+The staged supervisor gives every owned peer a durable runtime record fenced by owner session,
+process nonce, instance, and epoch. Workers authenticate over a private `0600` Unix socket
+using bounded, versioned NDJSON frames. In-memory ping/pong heartbeats avoid durable heartbeat
+writes, and a worker watchdog requests its own Pi shutdown if its owner disappears or a reload
+handoff is not completed. Same-process reload handoff requires the same session and process
+nonce; a resumed, forked, or newly opened process cannot adopt the old workers.
+
+Supervisor shutdown first sends `prepare_shutdown`, aborting only the correlated active request
+before requesting Pi's documented graceful `ctx.shutdown()`. Survivors are handled in parallel
+with bounded `SIGTERM` and `SIGKILL` stages. PID, process start token, process group, runtime ID,
+owner instance, and tmux token hash are revalidated before escalation. Changed metadata leaves
+the runtime blocked/lost instead of guessing ownership. Tmux sessions and external peers without
+matching runtime records are never signalled. This layer reuses the process-identity primitive
+introduced by the lifecycle hotfix and remains staged until commands wire it into `src/index.ts`.
 
 ## Storage model (v1, active)
 

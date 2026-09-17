@@ -284,7 +284,7 @@ test('repository teams are discovered before creation, can receive queued work, 
   assert.equal(requesterContext.customOptions.length, 1, 'A different lead can monitor the repository plan without taking ownership');
   await Promise.all([owner.shutdown(), requester.shutdown()]);
   await new Promise(resolve => setTimeout(resolve, 30));
-  await rm(root, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 test('user control can unblock and retry exhausted work with a durable audit record', async (t) => {

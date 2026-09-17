@@ -12,6 +12,7 @@
 
 - add the staged Team v2 domain and independent atomic stores for teams, members, inboxes, receipts, and token-fenced leases
 - add staged Team v2 membership, offline messaging, correlated requests, durable cancellation, presence, reconciliation, and a dynamically activated compact model tool
+- add the staged Team v2 supervised-peer control protocol, watchdog, reload handoff, runtime reconciliation, and bounded process shutdown
 - start autonomous managed teams from normal implementation prompts
 - isolate persistent peer sessions in dedicated branches and worktrees
 - add dependency scheduling, recovery, reassignment, local integration, verification, and corrective jobs
@@ -22,6 +23,7 @@
 
 - reject unsafe Team v2 paths and records, enforce bounded TTL/quotas, and preserve legacy data without traversing or migrating it
 - fence replaced Team v2 member and delivery owners, discard late replies, and never automatically replay a delivered request after failure
+- authenticate bounded worker control sockets and revalidate owner, tmux, PID, start-token, and process-group identity before supervisor escalation
 - validate worktree repository ownership and full integration commit ids
 - sanitize persisted activity and keep push, PR, merge, release, and deploy behind explicit human gates
 - await owner-fenced managed runtime shutdown and terminate only token-verified tmux sessions with revalidated process identity
