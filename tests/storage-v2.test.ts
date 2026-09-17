@@ -244,6 +244,16 @@ test('lease replacement fences old tokens and receipts expire only after termina
     resourceId: 'backend-1', ttlMs: 1_000,
   });
   assert.equal(third.generation, second.generation + 1, 'Release retains the monotonic generation tombstone');
+  await leases.acquire({
+    teamId: 'shop', leaseId: 'resource-api', kind: 'resource', holderId: 'pm-1',
+    resourceId: '/repo/api.ts', ttlMs: 1_000,
+  });
+  const firstLeasePage = await leases.page('shop', 1);
+  assert.equal(firstLeasePage.items.length, 1);
+  assert.ok(firstLeasePage.nextCursor);
+  const secondLeasePage = await leases.page('shop', 1, firstLeasePage.nextCursor);
+  assert.equal(secondLeasePage.items.length, 1);
+  assert.equal(secondLeasePage.nextCursor, undefined);
 
   const receipts = new ReceiptStore(paths, { now: () => now, terminalTtlMs: 1_000 });
   const delivered: Receipt = {
@@ -251,6 +261,13 @@ test('lease replacement fences old tokens and receipts expire only after termina
     status: 'delivered', at: new Date(now).toISOString(),
   };
   await receipts.record(delivered);
+  await receipts.record({ ...delivered, messageId: 'message-2' });
+  const firstReceiptPage = await receipts.page('shop', 'backend-1', 1);
+  assert.equal(firstReceiptPage.items.length, 1);
+  assert.ok(firstReceiptPage.nextCursor);
+  const secondReceiptPage = await receipts.page('shop', 'backend-1', 1, firstReceiptPage.nextCursor);
+  assert.equal(secondReceiptPage.items.length, 1);
+  assert.equal(secondReceiptPage.nextCursor, undefined);
   now += 1_000;
   await receipts.record({ ...delivered, at: new Date(now).toISOString() });
   assert.equal((await receipts.read('shop', 'backend-1', 'message-1'))?.at, delivered.at,

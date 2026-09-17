@@ -23,6 +23,11 @@ export type ReceiptStoreOptions = {
   readonly now?: () => number;
 };
 
+export type ReceiptPage = {
+  readonly items: readonly Receipt[];
+  readonly nextCursor?: string;
+};
+
 export class ReceiptStore {
   private readonly terminalTtlMs: number;
   private readonly now: () => number;
@@ -89,17 +94,24 @@ export class ReceiptStore {
     });
   }
 
-  async list(teamId: string, recipientId: string, limit = 100, cursor?: string): Promise<readonly Receipt[]> {
+  async page(teamId: string, recipientId: string, limit = 100, cursor?: string): Promise<ReceiptPage> {
     assertTeamId(teamId);
     assertEntityId(recipientId, 'recipient ID');
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Receipt page limit must be between 1 and 100.');
     if (cursor !== undefined) assertEntityId(cursor, 'receipt cursor');
     await this.prepare();
-    if (!await this.prepareRecipient(teamId, recipientId, false)) return [];
+    if (!await this.prepareRecipient(teamId, recipientId, false)) return { items: [] };
     const ids = await jsonFileNames(this.paths.recipientReceipts(teamId, recipientId), false);
-    const page = (cursor === undefined ? ids : ids.filter(id => id > cursor)).slice(0, limit);
-    const records = await Promise.all(page.map(id => this.read(teamId, recipientId, id)));
-    return records.filter((receipt): receipt is Receipt => receipt !== undefined);
+    const candidates = (cursor === undefined ? ids : ids.filter(id => id > cursor)).slice(0, limit + 1);
+    const selected = candidates.slice(0, limit);
+    const records = await Promise.all(selected.map(id => this.read(teamId, recipientId, id)));
+    const items = records.filter((receipt): receipt is Receipt => receipt !== undefined);
+    const nextCursor = candidates.length > limit ? selected.at(-1) : undefined;
+    return { items, ...(nextCursor ? { nextCursor } : {}) };
+  }
+
+  async list(teamId: string, recipientId: string, limit = 100, cursor?: string): Promise<readonly Receipt[]> {
+    return (await this.page(teamId, recipientId, limit, cursor)).items;
   }
 
   async purgeExpired(teamId: string, recipientId: string): Promise<number> {

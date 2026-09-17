@@ -24,6 +24,11 @@ export type LeaseStoreOptions = {
   readonly now?: () => number;
 };
 
+export type LeasePage = {
+  readonly items: readonly Lease[];
+  readonly nextCursor?: string;
+};
+
 export class LeaseStore {
   private readonly maxTtlMs: number;
   private readonly now: () => number;
@@ -145,6 +150,21 @@ export class LeaseStore {
       assertLease(released);
       await replaceAtomicJson(this.paths.lease(teamId, leaseId), released, { maxBytes: LEASE_MAX_BYTES });
     });
+  }
+
+  async page(teamId: string, limit = 100, cursor?: string): Promise<LeasePage> {
+    assertTeamId(teamId);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Lease page limit must be between 1 and 100.');
+    if (cursor !== undefined) assertEntityId(cursor, 'lease cursor');
+    await this.prepare();
+    await this.requireTeam(teamId);
+    const ids = await jsonFileNames(this.paths.leases(teamId), false);
+    const candidates = (cursor === undefined ? ids : ids.filter(id => id > cursor)).slice(0, limit + 1);
+    const selected = candidates.slice(0, limit);
+    const records = await Promise.all(selected.map(id => this.read(teamId, id)));
+    const items = records.filter((lease): lease is Lease => lease !== undefined);
+    const nextCursor = candidates.length > limit ? selected.at(-1) : undefined;
+    return { items, ...(nextCursor ? { nextCursor } : {}) };
   }
 
   async list(teamId: string): Promise<readonly Lease[]> {

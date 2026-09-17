@@ -11,7 +11,7 @@
 - integrate Team v2 membership, presence, durable messaging, correlated requests/replies, cancellation, reconciliation, and advisory resource leases
 - add explicit supervised-peer start/stop/close commands with authenticated worker control, watchdogs, reload handoff, and bounded identity-fenced shutdown
 - dynamically activate one compact non-destructive `team` model tool only while membership is active
-- add an on-demand bounded Team dashboard with a headless formatter and stable-ID selection
+- add an on-demand bounded, viewport-adaptive Team dashboard with compact and list/detail layouts, a headless formatter, and stable-ID selection
 - add explicit bounded legacy inspection and conservative closed-metadata migration while preserving all source bytes
 
 ### Security

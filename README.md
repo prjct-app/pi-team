@@ -38,7 +38,7 @@ Start a supervised peer from the human-controlled session:
 /team start backend /absolute/path/to/repository
 ```
 
-Only peers started by this explicit command receive requests automatically. Externally opened sessions never do. `/team status` opens a bounded dashboard; arrow keys select by stable record ID and Escape closes only the view—running operations continue.
+Only peers started by this explicit command receive requests automatically. Externally opened sessions never do. `/team status` opens a bounded dashboard that adapts from a compact single-column view to a wide list-and-detail layout. It preserves selection by stable record ID while resizing; arrow keys navigate, Enter toggles inline details, and Escape closes only the view—running operations continue.
 
 ## Commands
 
@@ -49,7 +49,7 @@ Lifecycle and process operations are human-only commands:
 | `/team create <team> <alias>` | Create and join a Team v2 team |
 | `/team join <team> <alias>` | Join an existing open team |
 | `/team start <alias> <existing-cwd>` | Start a supervised Pi peer in owned `tmux` runtime |
-| `/team status` | Open the on-demand dashboard (plain output outside TUI mode) |
+| `/team status` | Open the on-demand dashboard (plain output in print mode; notification in RPC mode) |
 | `/team inbox` | List bounded inbox metadata, never message bodies |
 | `/team receive <message-id>` | Read a correlated result explicitly |
 | `/team stop <alias>` | Gracefully stop an owned supervised peer after confirmation |

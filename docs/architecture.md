@@ -93,7 +93,7 @@ PID alone is never sufficient. Reuse, changed metadata, corruption, or missing e
 
 `src/ui/team-dashboard.ts` loads one bounded metadata-only snapshot on demand and renders through Pi 0.85.1's documented `ctx.ui.custom` API. It contains team/member status, inbox metadata, a whitelisted runtime projection, request receipts, leases, and shutdown/recovery warnings. Message bodies and process/ownership tokens are excluded.
 
-Rendering sanitizes terminal controls, truncates by visible width, pairs status icons with text, and caps each section. Selection stores a stable row/member ID rather than a mutable array index. Escape closes only the view and explicitly does not claim to cancel operations. Non-TUI modes use the same plain formatter.
+Rendering sanitizes terminal controls, truncates by visible width, pairs status icons with text, and caps each section. It derives a compact, standard, or wide list-and-detail layout from the current viewport, bounds output by terminal height, and keeps the selected stable row/member ID visible across resize rather than relying on a mutable array index. Enter toggles inline details where space is limited. Escape closes only the view and explicitly does not claim to cancel operations. Print mode writes the bounded plain formatter directly because Pi's print-mode UI methods are unavailable; RPC mode uses a notification. Pi's JSON mode retains its documented event-stream behavior and does not receive raw text that would corrupt the stream.
 
 ## Legacy preservation and migration
 
