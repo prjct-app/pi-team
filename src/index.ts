@@ -24,7 +24,8 @@ const RELOAD_STATE = Symbol.for('prjct.pi-team.reload-state.v2');
 const HEARTBEAT_MS = 10_000;
 const DELIVERY_POLL_MS = 1_000;
 const RELOAD_TTL_MS = 20_000;
-const EXTENSION_ENTRY = fileURLToPath(new URL('../index.ts', import.meta.url));
+// The compiled local build (scripts/build-pi.mjs) ships index.js; source runs keep index.ts.
+const EXTENSION_ENTRY = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? '../index.ts' : '../index.js', import.meta.url));
 
 export type InstallTeamOptions = {
   readonly root?: string;
