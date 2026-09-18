@@ -3,7 +3,7 @@ import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { EntityIdSchema, TeamIdSchema, TimestampSchema } from '../domain/team.ts';
 import {
-  createAtomicJson, ensurePrivateDirectory, ensurePrivateTree, jsonFileNames, readJson, replaceAtomicJson,
+  createAtomicJson, ensurePrivateDirectory, ensurePrivateTree, jsonFileNames, readJson, removeAtomic, replaceAtomicJson,
   withStorageLock,
 } from '../storage/atomic.ts';
 import { TeamPaths } from '../storage/paths.ts';
@@ -176,6 +176,23 @@ export class RuntimeStore {
       await replaceAtomicJson(path, next, { maxBytes: RUNTIME_MAX_BYTES, previous: true });
       return next;
     });
+  }
+
+  async removeTerminated(teamId: string, runtimeId: string, owner: OwnerIdentity): Promise<boolean> {
+    await this.prepare(teamId);
+    return withStorageLock(this.rosterLockPath(teamId), async () =>
+      withStorageLock(this.lockPath(teamId, runtimeId), async () => {
+        const path = this.paths.runtime(teamId, runtimeId);
+        const current = await readJson(path, assertOwnedRuntime, RUNTIME_MAX_BYTES);
+        if (!current) return false;
+        if (!sameOwner(current.owner, owner)) {
+          throw Object.assign(new Error('Runtime ownership has been fenced.'), { code: 'FENCED' });
+        }
+        if (current.state !== 'terminated') {
+          throw Object.assign(new Error('Only a terminated runtime can be removed.'), { code: 'INVALID_STATE' });
+        }
+        return removeAtomic(path);
+      }));
   }
 
   async advanceOwner(teamId: string, runtimeId: string, from: OwnerIdentity, to: OwnerIdentity, at: string): Promise<OwnedRuntime> {

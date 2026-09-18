@@ -37,6 +37,7 @@ export type TmuxLaunchOptions = {
   readonly owner: OwnerIdentity;
   readonly cwd: string;
   readonly command: readonly [string, ...string[]];
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly controlSocket: string;
   readonly controlToken: string;
   readonly ownershipToken: string;
@@ -77,6 +78,21 @@ function environment(output: string): ReadonlyMap<string, string> {
   }));
 }
 
+const ENVIRONMENT_MAX_BYTES = 256 * 1024;
+const TMUX_MANAGED_ENVIRONMENT = new Set(['TMUX', 'TMUX_PANE', 'TERM', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION',
+  'PWD', 'OLDPWD', 'SHLVL', '_']);
+function clientEnvironment(source: TmuxLaunchOptions['environment']): readonly string[] {
+  const entries = Object.entries(source ?? {}).filter((entry): entry is [string, string] =>
+    entry[1] !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry[0]) && !entry[0].startsWith('PI_TEAM_') &&
+    !TMUX_MANAGED_ENVIRONMENT.has(entry[0]))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`);
+  if (Buffer.byteLength(entries.join('\0'), 'utf8') > ENVIRONMENT_MAX_BYTES) {
+    throw new Error('Supervised runtime environment exceeds its byte limit.');
+  }
+  return entries.flatMap(value => ['-e', value]);
+}
+
 export class TmuxAdapter {
   constructor(
     private readonly run: TmuxCommand = defaultCommand,
@@ -95,6 +111,7 @@ export class TmuxAdapter {
     const target = `=${session}`;
     const args = [
       'new-session', '-d', '-s', session, '-c', options.cwd,
+      ...clientEnvironment(options.environment),
       '-e', `${ENV_RUNTIME_ID}=${options.runtimeId}`,
       '-e', `${ENV_OWNER_INSTANCE}=${options.owner.ownerInstanceId}`,
       '-e', `${ENV_OWNER_PROCESS_NONCE}=${options.owner.ownerProcessNonce}`,

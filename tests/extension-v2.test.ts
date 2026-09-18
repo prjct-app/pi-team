@@ -1,161 +1,53 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, lstat, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installTeam } from '../src/index.ts';
-import { TeamPaths } from '../src/storage/paths.ts';
-import { TeamStore } from '../src/storage/team-store.ts';
-import { TeamRuntime } from '../src/runtime/team-runtime.ts';
+import { DynamicStore, resolveProject } from '../src/dynamic/store.ts';
 
-type Handler = (event: any, context: ExtensionContext) => unknown;
-
-async function until(predicate: () => Promise<boolean>, attempts = 100): Promise<void> {
-  if (await predicate()) return;
-  if (attempts <= 0) throw new Error('Condition was not reached.');
-  await new Promise(resolve => setTimeout(resolve, 20));
-  return until(predicate, attempts - 1);
+function harness(root: string) {
+  const handlers = new Map<string, any>(); const commands = new Map<string, any>(); const tools = new Map<string, any>();
+  const active = ['read', 'other']; const turns: string[] = []; const notices: string[] = [];
+  const ctx = { cwd: root, hasUI: true, sessionManager: { getSessionId: () => 'session-test' }, ui: { notify: (s: string) => notices.push(s) } };
+  const api = { on: (n: string, h: any) => handlers.set(n, h), registerCommand: (n: string, c: any) => commands.set(n, c),
+    registerTool: (t: any) => { tools.set(t.name, t); active.push(t.name); }, getActiveTools: () => [...active],
+    setActiveTools: (names: string[]) => active.splice(0, active.length, ...names),
+    sendUserMessage: (s: string) => turns.push(s), sendMessage() {} } as unknown as ExtensionAPI;
+  installTeam(api, { root, pollMs: 60_000, identity: async () => ({ processPid: 4242, processGroupId: 4242, processStartToken: 'test' }),
+    runner: () => ({ run: async () => ({ status: 'completed', summary: 'Verified', stopped: true }), close: async () => {} }) });
+  return { handlers, active, turns, notices, tools, command: (s: string) => commands.get('team').handler(s, ctx),
+    emit: (n: string, event: any = {}) => handlers.get(n)?.(event, ctx) };
 }
 
-function extensionHarness(root: string, sessionId: string, entries: any[] = [], reloadTtlMs = 20_000) {
-  const handlers = new Map<string, Handler[]>();
-  const commands = new Map<string, any>();
-  const tools = new Map<string, any>();
-  const notices: { message: string; level: string }[] = [];
-  const activeTools: string[] = [];
-  const context = {
-    cwd: '/repo',
-    mode: 'tui',
-    hasUI: true,
-    isIdle: () => true,
-    abort() {},
-    shutdown() {},
-    sessionManager: {
-      getSessionId: () => sessionId,
-      getBranch: () => entries,
-    },
-    ui: {
-      notify(message: string, level = 'info') { notices.push({ message, level }); },
-      confirm: async () => true,
-    },
-  } as unknown as ExtensionContext;
-  const api = {
-    on(name: string, handler: Handler) { handlers.set(name, [...handlers.get(name) ?? [], handler]); },
-    registerCommand(name: string, command: any) { commands.set(name, command); },
-    registerTool(tool: any) { tools.set(tool.name, tool); activeTools.push(tool.name); },
-    registerMessageRenderer() {},
-    appendEntry(customType: string, data: unknown) { entries.push({ type: 'custom', customType, data }); },
-    sendMessage() {},
-    getActiveTools: () => [...activeTools],
-    setActiveTools(next: string[]) { activeTools.splice(0, activeTools.length, ...next); },
-  } as unknown as ExtensionAPI;
-  installTeam(api, { root, heartbeatMs: 60_000, pollMs: 60_000, reloadTtlMs });
-  return {
-    entries,
-    notices,
-    activeTools,
-    tools,
-    async emit(name: string, event: unknown = {}) {
-      return Promise.all((handlers.get(name) ?? []).map(handler => handler(event, context)));
-    },
-    async command(input: string) { await commands.get('team').handler(input, context); },
-  };
-}
-
-test('v2 extension does not intercept normal prompts and activates the compact tool only after join', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-team-extension-v2-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const app = extensionHarness(root, 'session-1');
-  await app.emit('session_start', { reason: 'startup' });
-  assert.equal(app.activeTools.includes('team'), false);
-  assert.deepEqual(await app.emit('input', { source: 'interactive', text: 'Implement the API' }), [undefined]);
-  await app.command('create shop lead');
-  assert.equal(app.activeTools.includes('team'), true);
-  assert.match(app.notices.at(-1)?.message ?? '', /Created and joined/);
-  assert.ok(app.entries.some(entry => entry.customType === 'team-v2-membership' && entry.data?.teamId === 'shop'));
-  await app.emit('session_shutdown', { reason: 'quit' });
+test('fresh startup is inert; explicit objective creates one Run and one user turn; normal prompts unchanged', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'team-ext-')); const app = harness(root);
+  try {
+    await app.emit('session_start');
+    await assert.rejects(lstat(join(root, 'orchestration-v2')), { code: 'ENOENT' });
+    assert.deepEqual(app.active, ['read', 'other']); assert.equal(app.handlers.has('input'), false);
+    assert.equal(await app.emit('before_agent_start', { systemPrompt: 'normal' }), undefined);
+    await app.command('Ship login validation'); await app.command('Second objective');
+    assert.equal(app.turns.length, 1); assert.ok(app.active.includes('team_orchestrate'));
+    const state = await new DynamicStore(join(root, 'orchestration-v2')).read((await resolveProject(root)).teamId);
+    assert.deepEqual(state?.runs.map(r => r.status), ['active', 'queued']);
+    await app.tools.get('team_orchestrate').execute('id', { action: 'finish', summary: 'Verified' });
+    assert.deepEqual(app.active, ['read', 'other']);
+  } finally { await app.emit('session_shutdown', { reason: 'quit' }); await rm(root, { recursive: true, force: true }); }
 });
-
-test('edit tools respect another member resource lease while Bash receives an advisory warning', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-team-extension-lease-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const app = extensionHarness(root, 'session-owner');
-  await app.emit('session_start', { reason: 'startup' });
-  await app.command('create lease-team lead');
-  const runtime = new TeamRuntime(new TeamPaths(root));
-  const peer = await runtime.memberships.join({ teamId: 'lease-team', alias: 'peer', sessionId: 'peer-session', cwd: '/repo-a', kind: 'external' });
-  await runtime.resources.claim(peer, 'src');
-  const edit = await app.emit('tool_call', { toolName: 'edit', input: { path: '/repo-a/src/app.ts', edits: [] } });
-  assert.equal((edit[0] as { block?: boolean })?.block, true);
-  await app.emit('tool_call', { toolName: 'bash', input: { command: 'cat /repo-a/src/app.ts' } });
-  assert.match(app.notices.at(-1)?.message ?? '', /claimed by another member/);
-  await app.emit('session_shutdown', { reason: 'quit' });
-});
-
-test('purge remains an explicit human command and removes only a closed inactive team', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-team-extension-purge-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const runtime = new TeamRuntime(new TeamPaths(root));
-  await runtime.teams.create({
-    schemaVersion: 2, teamId: 'archive', state: 'closed',
-    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-  });
-  const app = extensionHarness(root, 'session-purge');
-  await app.emit('session_start', { reason: 'startup' });
-  await app.command('purge archive');
-  assert.equal(await runtime.teams.read('archive'), undefined);
-  assert.match(app.notices.at(-1)?.message ?? '', /Purged closed Team/);
-  await app.emit('session_shutdown', { reason: 'quit' });
-});
-
-test('reload retains exact membership for the same session', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-team-extension-reload-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const entries: any[] = [];
-  const original = extensionHarness(root, 'session-reload', entries);
-  await original.emit('session_start', { reason: 'startup' });
-  await original.command('create reload-team lead');
-  const teams = new TeamStore(new TeamPaths(root));
-  const before = (await teams.listMembers('reload-team')).find(member => member.alias === 'lead')!;
-  await original.emit('session_shutdown', { reason: 'reload' });
-
-  const replacement = extensionHarness(root, 'session-reload', entries);
-  await replacement.emit('session_start', { reason: 'reload' });
-  const after = (await teams.listMembers('reload-team')).find(member => member.alias === 'lead')!;
-  assert.equal(after.generation, before.generation);
-  assert.equal(replacement.activeTools.includes('team'), true);
-  await replacement.emit('session_shutdown', { reason: 'quit' });
-});
-
-test('failed reload expires into membership cleanup instead of indefinite ownership', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-team-extension-failed-reload-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const app = extensionHarness(root, 'session-failed-reload', [], 10);
-  await app.emit('session_start', { reason: 'startup' });
-  await app.command('create failed-reload lead');
-  await app.emit('session_shutdown', { reason: 'reload' });
-  const runtime = new TeamRuntime(new TeamPaths(root));
-  await until(async () => {
-    const [member] = await runtime.teams.listMembers('failed-reload');
-    const leases = await runtime.leases.list('failed-reload');
-    return member?.state === 'left' && leases.every(lease => lease.releasedAt !== undefined);
-  });
-});
-
-for (const reason of ['new', 'fork', 'resume'] as const) {
-  test(`${reason} starts a boundary that does not inherit outgoing Team membership`, async (t) => {
-    const root = await mkdtemp(join(tmpdir(), `pi-team-extension-${reason}-`));
-    t.after(() => rm(root, { recursive: true, force: true }));
-    const entries: any[] = [];
-    const original = extensionHarness(root, `session-before-${reason}`, entries);
-    await original.emit('session_start', { reason: 'startup' });
-    await original.command(`create ${reason}-team lead`);
-    await original.emit('session_shutdown', { reason });
-
-    const replacement = extensionHarness(root, `session-after-${reason}`, entries);
-    await replacement.emit('session_start', { reason, previousSessionFile: '/old' });
-    assert.equal(replacement.activeTools.includes('team'), false);
+for (const reason of ['reload', 'new', 'fork']) test(`${reason} interrupts and fences without replay; removed commands leave old bytes intact`, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'team-boundary-')); const app = harness(root);
+  try {
+    const old = join(root, 'old-store.json'); await writeFile(old, 'user bytes');
+    await app.emit('session_start');
+    for (const text of ['create shop lead', 'join shop lead', 'migrate shop', 'legacy inspect']) await app.command(text);
+    assert.equal(await readFile(old, 'utf8'), 'user bytes'); assert.equal(app.turns.length, 0);
+    await app.command('Ship login validation'); await app.command('Queued'); await app.emit('session_shutdown', { reason });
+    const state = await new DynamicStore(join(root, 'orchestration-v2')).read((await resolveProject(root)).teamId);
+    assert.equal(state?.owner, undefined); assert.equal(state?.runs[0]?.status, 'cancelled'); assert.equal(state?.runs[1]?.status, 'queued');
+    const replacement = harness(root); await replacement.emit('session_start', { reason });
+    assert.equal(replacement.turns.length, 0); assert.deepEqual(replacement.active, ['read', 'other']);
     await replacement.emit('session_shutdown', { reason: 'quit' });
-  });
-}
+  } finally { await app.emit('session_shutdown', { reason: 'quit' }); await rm(root, { recursive: true, force: true }); }
+});

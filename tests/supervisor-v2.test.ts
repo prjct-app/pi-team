@@ -443,7 +443,8 @@ test('tmux adapter marks ownership and refuses to kill after metadata tampering'
     ownerSessionId: 'owner-session', ownerInstanceId: 'owner-instance', ownerProcessNonce: 'f'.repeat(64), ownerEpoch: 1,
   };
   const launched = await adapter.launch({
-    runtimeId: 'runtime-tmux', owner, cwd: '/repo/backend', command: ['pi'], controlSocket: '/tmp/control.sock',
+    runtimeId: 'runtime-tmux', owner, cwd: '/repo/backend', command: ['pi'],
+    environment: { OPENAI_API_KEY: 'caller-key', PI_TEAM_RUNTIME_ID: 'attacker-value' }, controlSocket: '/tmp/control.sock',
     controlToken: 'a'.repeat(64), ownershipToken: 'b'.repeat(64),
     workerMembership: launchInput().workerMembership, autoRequests: true,
   });
@@ -454,6 +455,10 @@ test('tmux adapter marks ownership and refuses to kill after metadata tampering'
     createdAt: new Date(BASE).toISOString(), updatedAt: new Date(BASE).toISOString(),
   };
   assert.equal(await adapter.metadataMatches(runtime), true);
+  const launch = recorded.find(args => args[0] === 'new-session')!;
+  assert.equal(launch.includes('OPENAI_API_KEY=caller-key'), true);
+  assert.equal(launch.includes('PI_TEAM_RUNTIME_ID=attacker-value'), false);
+  assert.equal(launch.includes('PI_TEAM_RUNTIME_ID=runtime-tmux'), true);
   metadata.set('@pi-team-owner-instance', 'tampered');
   assert.equal(await adapter.killSession(runtime), false);
   assert.equal(recorded.some(args => args[0] === 'kill-session'), false);
@@ -481,6 +486,31 @@ test('tmux launch cleans a partially marked session only with matching environme
     workerMembership: launchInput().workerMembership, autoRequests: true,
   }), /metadata write failed/);
   assert.equal(calls.some(args => args[0] === 'kill-session'), true);
+});
+
+test('runtime storage removes only owned terminal records and does not exhaust quota', async (t) => {
+  const fixture = await setup(t);
+  const owner: OwnerIdentity = {
+    ownerSessionId: 'owner-session', ownerInstanceId: 'owner-instance', ownerProcessNonce: 'f'.repeat(64), ownerEpoch: 1,
+  };
+  const make = (state: OwnedRuntime['state']): OwnedRuntime => {
+    const at = new Date(BASE).toISOString();
+    return { schemaVersion: 2, runtimeId: randomUUID(), teamId: 'shop', memberId: 'backend-1', owner,
+      processPid: 7000, processStartToken: 'start', cwd: '/repo/backend', state, createdAt: at, updatedAt: at };
+  };
+  const ready = make('ready');
+  await fixture.runtimes.create(ready);
+  await assert.rejects(fixture.runtimes.removeTerminated('shop', ready.runtimeId, owner), /Only a terminated runtime/);
+  await fixture.runtimes.update('shop', ready.runtimeId, owner, current => ({ ...current, state: 'stopping' }));
+  const terminated = await fixture.runtimes.update('shop', ready.runtimeId, owner, current => ({ ...current, state: 'terminated' }));
+  await assert.rejects(fixture.runtimes.removeTerminated('shop', terminated.runtimeId, { ...owner, ownerEpoch: 2 }), /fenced/);
+  assert.equal(await fixture.runtimes.removeTerminated('shop', terminated.runtimeId, owner), true);
+  for (const _ of Array.from({ length: 33 })) {
+    const record = make('terminated');
+    await fixture.runtimes.create(record);
+    assert.equal(await fixture.runtimes.removeTerminated('shop', record.runtimeId, owner), true);
+  }
+  assert.deepEqual(await fixture.runtimes.list('shop'), []);
 });
 
 test('runtime storage preserves corruption and rejects symlinked records', async (t) => {

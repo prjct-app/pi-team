@@ -1,54 +1,30 @@
-export const TEAM_COMMANDS = [
-  'create', 'join', 'start', 'status', 'inbox', 'receive', 'stop', 'kill', 'leave', 'close',
-  'doctor', 'legacy', 'migrate', 'purge',
-] as const;
+import type { AutocompleteItem } from '@earendil-works/pi-tui';
+import { bounded } from '../dynamic/domain.ts';
 
+export const TEAM_HELP = '/team <objective> | status | history | doctor | cancel [run-id] | help';
 export type TeamCommand =
-  | { readonly action: 'create'; readonly teamId: string; readonly alias: string }
-  | { readonly action: 'join'; readonly teamId: string; readonly alias: string }
-  | { readonly action: 'start'; readonly alias: string; readonly cwd: string }
-  | { readonly action: 'status' | 'inbox' | 'leave' | 'close' | 'doctor' }
-  | { readonly action: 'receive'; readonly messageId: string }
-  | { readonly action: 'stop' | 'kill'; readonly alias: string }
-  | { readonly action: 'legacy-inspect' }
-  | { readonly action: 'legacy-stop' }
-  | { readonly action: 'migrate'; readonly teamId?: string }
-  | { readonly action: 'purge'; readonly teamId: string };
-
-export const TEAM_HELP = 'Usage: /team create <team> <alias> | join <team> <alias> | start <alias> <existing-cwd> | status | inbox | receive <message-id> | stop <alias> | kill <alias> | leave | close | doctor | legacy inspect | legacy stop | migrate [team] | purge <closed-team>';
-
-function words(input: string): readonly string[] {
-  return input.trim().split(/\s+/).filter(Boolean);
-}
-
+  | { readonly action: 'objective'; readonly objective: string }
+  | { readonly action: 'status' | 'history' | 'doctor' | 'help' }
+  | { readonly action: 'cancel'; readonly runId?: string };
+const removed = new Set(['create', 'join', 'migrate', 'legacy', 'start', 'stop', 'kill', 'leave', 'close', 'purge', 'receive', 'inbox']);
 export function parseTeamCommand(input: string): TeamCommand {
-  const [action, first, second, ...extra] = words(input);
-  if (!action) return { action: 'status' };
-  if ((action === 'create' || action === 'join') && first && second && extra.length === 0) {
-    return { action, teamId: first, alias: second };
+  const text = input.trim();
+  bounded(text, 8192, 'Objective');
+  if (!text) return { action: 'status' };
+  const [first, ...args] = text.split(/\s+/);
+  const action = first!.toLowerCase();
+  if (removed.has(action)) throw new Error(`Unsupported Team command. ${TEAM_HELP}`);
+  if (['status', 'history', 'doctor', 'help'].includes(action)) {
+    if (args.length) throw new Error(TEAM_HELP);
+    return { action: action as 'status' | 'history' | 'doctor' | 'help' };
   }
-  if (action === 'start' && first && second && extra.length === 0) {
-    return { action, alias: first, cwd: second };
+  if (action === 'cancel') {
+    if (args.length > 1 || (args[0] && !/^[a-zA-Z0-9-]{1,128}$/.test(args[0]))) throw new Error(TEAM_HELP);
+    return { action, ...(args[0] ? { runId: args[0] } : {}) };
   }
-  if (['status', 'inbox', 'leave', 'close', 'doctor'].includes(action) && !first) {
-    return { action: action as 'status' | 'inbox' | 'leave' | 'close' | 'doctor' };
-  }
-  if (action === 'receive' && first && !second) return { action, messageId: first };
-  if ((action === 'stop' || action === 'kill') && first && !second) return { action, alias: first };
-  if (action === 'legacy' && first === 'inspect' && !second) return { action: 'legacy-inspect' };
-  if (action === 'legacy' && first === 'stop' && !second) return { action: 'legacy-stop' };
-  if (action === 'migrate' && !second) return { action, ...(first ? { teamId: first } : {}) };
-  if (action === 'purge' && first && !second) return { action, teamId: first };
-  throw new Error(TEAM_HELP);
+  return { action: 'objective', objective: text };
 }
-
-export function commandCompletions(prefix: string): { value: string; label: string }[] {
-  const input = prefix.trimStart();
-  if (input.startsWith('legacy ')) {
-    return ['inspect', 'stop']
-      .filter(value => value.startsWith(input.slice('legacy '.length)))
-      .map(value => ({ value: `legacy ${value}`, label: `legacy ${value}` }));
-  }
-  if (input.includes(' ')) return [];
-  return TEAM_COMMANDS.filter(value => value.startsWith(input)).map(value => ({ value, label: value }));
+export function commandCompletions(prefix: string): AutocompleteItem[] | null {
+  const values = ['status', 'history', 'doctor', 'cancel', 'help'].filter(value => value.startsWith(prefix));
+  return values.length ? values.map(value => ({ value, label: value })) : null;
 }
