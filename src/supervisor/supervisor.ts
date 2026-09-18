@@ -48,6 +48,7 @@ export type SupervisorLaunch = {
   readonly memberId: string;
   readonly cwd: string;
   readonly command: readonly [string, ...string[]];
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly workerMembership: Membership;
   readonly autoRequests: boolean;
 };
@@ -445,6 +446,7 @@ export class TeamSupervisor {
       owner: this.ownerValue,
       cwd: input.cwd,
       command: input.command,
+      environment: input.environment,
       controlSocket: this.socketPath,
       controlToken,
       ownershipToken,

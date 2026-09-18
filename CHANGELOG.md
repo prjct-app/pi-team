@@ -4,26 +4,25 @@
 
 ### Breaking changes
 
-- replace the v1 managed factory and automatic prompt interception with explicit Team v2 commands
-- remove managed plans, automatic worktrees, schedulers, publication gates, and the old factory tools
-- move active state to independent Team v2 records under `${PRJCT_HOME:-~/.prjct}/pi-team/`
+- replace manual create/join membership with explicit `/team <objective>` orchestration
+- remove legacy inspection, migration, and v1 mailbox code from the package
+- store persistent project Teams under `${PRJCT_HOME:-~/.prjct}/pi-team/orchestration-v2/`
 
 ### Features
 
-- integrate Team v2 membership, presence, durable messaging, correlated requests/replies, cancellation, reconciliation, and advisory resource leases
-- add explicit supervised-peer start/stop/close commands with authenticated worker control, watchdogs, reload handoff, and bounded identity-fenced shutdown
-- dynamically activate one compact non-destructive `team` model tool only while membership is active
-- add an on-demand bounded Team dashboard with a headless formatter and stable-ID selection
-- add explicit bounded legacy inspection and conservative closed-metadata migration while preserving all source bytes
+- persist bounded Run history and reusable Expert identities, sessions, memory, and assignment history
+- dynamically create missing Experts and reuse existing roles across later Runs
+- queue busy Experts and later objectives while allowing bounded parallel work across distinct Experts
+- add the active-Run-only `team_orchestrate` tool and bounded status, history, doctor, and cancellation commands
+- execute Experts through authenticated supervised workers with durable correlated replies and resource leases
 
 ### Security
 
-- never automatically wake or terminate external peers
-- require human confirmation for destructive lifecycle, process, and migration actions
-- reject symlinks and corrupt/future records, enforce quotas and TTLs, and fence owners with tokens, generations, and epochs
-- revalidate PID start token, process group, runtime owner, and tmux ownership metadata before every shutdown escalation
-- never automatically replay work after model exposure, and reject late replies to terminal requests
-- keep legacy managed plans, journals, snapshots, worktrees, and weak process evidence inspection-only
+- keep normal prompts inert until an explicit Team objective
+- fence owners and late results by process identity, epoch, generation, request, and receipt
+- inherit the launching Pi environment explicitly when tmux already has a server
+- validate worker request bodies and durable assignment/sender identity before model execution
+- stop only proven-owned workers; interruption preserves history without automatic replay
 
 ## [0.5.7](https://github.com/prjct-app/pi-team/compare/v0.5.6...v0.5.7) (2026-09-10)
 
