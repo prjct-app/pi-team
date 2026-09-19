@@ -1,5 +1,6 @@
 import type { AutocompleteItem } from '@earendil-works/pi-tui';
 import { bounded } from '../dynamic/domain.ts';
+import { completer } from '@prjct.app/pi-tui-kit';
 
 export const TEAM_HELP = '/team <objective> | status | history | doctor | cancel [run-id] | help';
 export type TeamCommand =
@@ -24,7 +25,11 @@ export function parseTeamCommand(input: string): TeamCommand {
   }
   return { action: 'objective', objective: text };
 }
-export function commandCompletions(prefix: string): AutocompleteItem[] | null {
-  const values = ['status', 'history', 'doctor', 'cancel', 'help'].filter(value => value.startsWith(prefix));
-  return values.length ? values.map(value => ({ value, label: value })) : null;
-}
+/** Subcommands with the prjct mark. Anything else typed after /team is a new objective. */
+export const commandCompletions: (prefix: string) => AutocompleteItem[] | null = completer([
+  { value: 'status', description: 'panel of Runs and Experts' },
+  { value: 'history', description: 'the last Runs as text' },
+  { value: 'doctor', description: 'ownership and blocked experts' },
+  { value: 'cancel', description: 'cancel the active Run (owner only)' },
+  { value: 'help', description: 'what /team accepts' },
+]);

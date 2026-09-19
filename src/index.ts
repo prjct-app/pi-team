@@ -10,7 +10,7 @@ import { ProductionExpertRunner } from './dynamic/runner.ts';
 import { DispatchSchema, metadata } from './dynamic/domain.ts';
 import { teamView } from './dynamic/view.ts';
 import { teamPanelSpec, type TeamOps } from './dynamic/panel.ts';
-import { openPanel } from '@prjct.app/pi-tui-kit';
+import { brand, openPanel } from '@prjct.app/pi-tui-kit';
 import { installExpertWorker } from './dynamic/worker.ts';
 
 export type InstallTeamOptions = {
@@ -110,7 +110,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return service;
   };
   pi.registerCommand('team', {
-    description: 'Start an explicit project objective, or inspect Team status/history/doctor and cancel Runs',
+    description: brand('team: /team <objective> starts a Run; status | history | doctor | cancel'),
     getArgumentCompletions: commandCompletions,
     handler: (input, ctx) => queue(async () => {
       slot.ctx = ctx;
