@@ -25,6 +25,18 @@ export type RunnerOptions = {
 // The compiled local build ships index.js; source checkouts execute index.ts directly.
 const ENTRY = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? '../../index.ts' : '../../index.js', import.meta.url));
 
+/**
+ * Why an Expert did not start, safe to show: a failed child command's message
+ * repeats its arguments (tmux -e carries control and lease tokens), so it is
+ * replaced, and anything token-shaped is masked.
+ */
+export function safeReason(error: unknown): string {
+  if (!(error instanceof Error)) return 'unknown error';
+  const code = (error as { code?: unknown }).code;
+  const text = /Command failed|spawn|tmux\s/i.test(error.message) ? 'tmux could not start the Expert session' : error.message;
+  return metadata(`${text.replace(/[A-Za-z0-9_+/=-]{32,}/g, '…')}${typeof code === 'string' ? ` (${code})` : ''}`, 240);
+}
+
 /** Durable request/reply transport; a launch or a model turn alone is never success. */
 export class ProductionExpertRunner implements ExpertRunner {
   readonly runtime: TeamRuntime;
@@ -131,10 +143,12 @@ export class ProductionExpertRunner implements ExpertRunner {
         if (!record || ['lost', 'terminated'].includes(record.state)) break;
         await delay(this.options.pollMs ?? 250, undefined, { signal });
       }
-    } catch {
-      // Never expose command stderr: tmux arguments contain control/lease credentials.
+    } catch (error) {
+      // Never expose command stderr: tmux arguments contain control/lease
+      // credentials. The error's own message and code are safe and say why.
+      const reason = safeReason(error);
       state.outcome = { status: signal.aborted ? 'cancelled' : 'failed', summary: signal.aborted
-        ? 'Expert execution interrupted or timed out.' : 'Expert runner failed (requires authenticated Pi and tmux); inspect /team doctor.', stopped: false };
+        ? 'Expert execution interrupted or timed out.' : `Expert could not start: ${reason}. Inspect /team doctor.`, stopped: false };
     } finally {
       if (state.requestId && state.owner && state.outcome.status !== 'completed') {
         await this.runtime.requests.cancel(state.owner, state.requestId).catch(() => {});

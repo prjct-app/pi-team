@@ -48,7 +48,9 @@ export function workerMembershipFromEnvironment(
   const alias = assertTeamId(environment.PI_TEAM_MEMBER_ALIAS!);
   const sessionId = assertEntityId(environment.PI_TEAM_MEMBER_SESSION!, 'session ID');
   const leaseToken = environment.PI_TEAM_MEMBER_LEASE_TOKEN!;
-  if (!/^[a-f0-9]{64}$/.test(leaseToken)) throw new Error('Invalid supervised Team membership environment.');
+  // Same shape the lease store issues and the lease schema accepts (a UUID
+  // today). Requiring 64 hex characters rejected every real Expert at startup.
+  if (!/^[A-Za-z0-9_-]{32,256}$/.test(leaseToken)) throw new Error('Invalid supervised Team membership environment.');
   return {
     teamId,
     memberId,
