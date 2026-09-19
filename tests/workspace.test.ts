@@ -26,3 +26,14 @@ test('each write-capable Expert gets its own persistent Git worktree', async t =
   assert.equal(execFileSync('git', ['-C', project, 'rev-parse', '--abbrev-ref', 'HEAD']).toString().trim(), 'main', 'nor the person\'s checkout');
   assert.equal(await expertWorkspace({ root: store, teamId, expertId: 'expert-a', projectPath: project }), a, 'reused across assignments');
 });
+
+test('direct Expert messages leave a private trace the orchestrator and /team can show', async t => {
+  const { recordPeerMessage, recentPeerMessages, peerLine } = await import('../src/dynamic/peer-log.ts');
+  const { stat } = await import('node:fs/promises');
+  const dir = await mkdtemp(join(tmpdir(), 'team-peers-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  await recordPeerMessage(dir, { at: '2026-09-19T07:00:00.000Z', from: 'fty-4', to: 'fty-26', kind: 'blocker', body: 'Need /api/demo merged first.' });
+  await recordPeerMessage(dir, { at: '2026-09-19T07:01:00.000Z', from: 'fty-26', to: 'fty-4', kind: 'info', body: 'Merged in #212.' });
+  const talk = await recentPeerMessages(dir);
+  assert.deepEqual(talk.map(peerLine), ['fty-4 → fty-26 blocker: Need /api/demo merged first.', 'fty-26 → fty-4 info: Merged in #212.']);
+  assert.equal((await stat(join(dir, 'peer-messages.jsonl'))).mode & 0o777, 0o600);
+});

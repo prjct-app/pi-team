@@ -64,7 +64,7 @@ for (const blocked of [false, true]) test(`production adapter correlates durable
     assert.equal(state.experts[0]?.status, blocked ? 'blocked' : 'idle');
     assert.ok(!JSON.stringify(state).includes('private-value'));
     assert.ok(launches[0]?.command.includes(store.sessionPath(project.teamId, state.experts[0]!.sessionRef)));
-    assert.ok(launches[0]?.command.includes('read,team_reply'));
+    assert.ok(launches[0]?.command.includes('read,team_reply,team_peers,team_message'));
     assert.ok(launches[0]?.command.includes('--no-context-files'));
     assert.equal(launches[0]?.environment?.OPENAI_API_KEY, 'caller-key');
     assert.equal((await runner.runtime.runtimes.list(project.teamId)).length, blocked ? 1 : 0);
