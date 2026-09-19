@@ -399,7 +399,9 @@ export class TeamSupervisor {
       await ensurePrivateTree(this.paths.root, 'teams');
       await ensurePrivateTree(this.paths.root, 'control');
       const socketDirectory = dirname(this.hub.socketPath);
-      if (socketDirectory !== this.paths.control()) await ensurePrivateDirectory(socketDirectory);
+      // Only the short fallback is ours to create and check; a caller-chosen
+      // socket path lives wherever the caller decided.
+      if (socketDirectory === shortSocketRoot()) await ensurePrivateDirectory(socketDirectory);
       await this.hub.start();
     })();
     return this.startPromise;
