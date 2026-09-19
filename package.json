@@ -71,5 +71,8 @@
     "CONTRIBUTING.md",
     "LICENSE",
     "CHANGELOG.md"
-  ]
+  ],
+  "dependencies": {
+    "@prjct.app/pi-tui-kit": "^0.1.0"
+  }
 }
