@@ -9,6 +9,8 @@ import { DynamicTeamService, type ExpertRunner } from './dynamic/service.ts';
 import { ProductionExpertRunner } from './dynamic/runner.ts';
 import { DispatchSchema, metadata } from './dynamic/domain.ts';
 import { teamView } from './dynamic/view.ts';
+import { teamPanelSpec, type TeamOps } from './dynamic/panel.ts';
+import { openPanel } from '@prjct.app/pi-tui-kit';
 import { installExpertWorker } from './dynamic/worker.ts';
 
 export type InstallTeamOptions = {
@@ -128,6 +130,22 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           await slot.service.cancelRun(command.runId); await sync(); output('Run cancellation recorded.'); return;
         }
         const project = await resolveProject(ctx.cwd);
+        if (command.action === 'status' && ctx.mode === 'tui' && ctx.hasUI && typeof ctx.ui.custom === 'function') {
+          const ops: TeamOps = {
+            load: () => store.read(project.teamId),
+            isOwner: () => Boolean(slot.service?.isOwner),
+            // Through the same queue as the scheduler tick, so they never interleave.
+            cancel: runId => queue(async () => {
+              if (!slot.service?.isOwner) throw new Error('Only the owning session can cancel Runs.');
+              await slot.service.cancelRun(runId); await sync();
+              return `Cancellation recorded for Run ${runId}.`;
+            }),
+            compose: () => ctx.ui.setEditorText('/team '),
+          };
+          // The panel stays open while Runs change; do not hold the command queue.
+          void openPanel(ctx, teamPanelSpec(ops, await store.read(project.teamId)));
+          return;
+        }
         output(teamView(await store.read(project.teamId), command.action));
       } catch (error) { output(metadata(error instanceof Error ? error.message : 'Team command failed.', 512), 'error'); }
     }),
