@@ -5,6 +5,7 @@
 - replace the v1 managed factory and automatic prompt interception with explicit Team v2 commands
 - remove managed plans, automatic worktrees, schedulers, publication gates, and the old factory tools
 - move active state to independent Team v2 records under `${PRJCT_HOME:-~/.prjct}/pi-team/`
+- drop `/team legacy inspect`, `/team legacy stop`, `/team migrate`, and startup detection of `~/.pi/agent/teams`
 
 ### Features
 
@@ -12,16 +13,14 @@
 - add explicit supervised-peer start/stop/close commands with authenticated worker control, watchdogs, reload handoff, and bounded identity-fenced shutdown
 - dynamically activate one compact non-destructive `team` model tool only while membership is active
 - add an on-demand bounded, viewport-adaptive Team dashboard with compact and list/detail layouts, a headless formatter, and stable-ID selection
-- add explicit bounded legacy inspection and conservative closed-metadata migration while preserving all source bytes
 
 ### Security
 
 - never automatically wake or terminate external peers
-- require human confirmation for destructive lifecycle, process, and migration actions
+- require human confirmation for destructive lifecycle and process actions
 - reject symlinks and corrupt/future records, enforce quotas and TTLs, and fence owners with tokens, generations, and epochs
 - revalidate PID start token, process group, runtime owner, and tmux ownership metadata before every shutdown escalation
 - never automatically replay work after model exposure, and reject late replies to terminal requests
-- keep legacy managed plans, journals, snapshots, worktrees, and weak process evidence inspection-only
 
 ## [0.5.7](https://github.com/prjct-app/pi-team/compare/v0.5.6...v0.5.7) (2026-09-10)
 

@@ -57,9 +57,6 @@ Lifecycle and process operations are human-only commands:
 | `/team leave` | Leave and stop this session's supervised peers |
 | `/team close` | Close the team after bounded owned-runtime shutdown |
 | `/team doctor` | Show bounded diagnostics without ownership tokens |
-| `/team legacy inspect` | Explicitly inventory preserved legacy roots, shallowly and read-only |
-| `/team legacy stop` | Report legacy runtime evidence and safe manual guidance; sends no signals |
-| `/team migrate <team>` | Import only safe legacy team metadata as a closed v2 archive |
 | `/team purge <team>` | Permanently remove a closed, inactive v2 team after confirmation |
 
 Names are lowercase identifiers beginning with a letter and containing letters, digits, or hyphens. Unknown teams are rejected rather than created implicitly.
@@ -72,7 +69,7 @@ The dynamically activated `team` tool exposes only:
 - `send` and explicitly correlated `reply`
 - advisory resource `claim` and `release`
 
-It cannot create, join, start, stop, kill, leave, close, migrate, or purge. Peer text is untrusted data and never grants authorization. Requests that reached a model are never automatically replayed after interruption, favoring duplicate-effect prevention over guaranteed execution.
+It cannot create, join, start, stop, kill, leave, close, or purge. Peer text is untrusted data and never grants authorization. Requests that reached a model are never automatically replayed after interruption, favoring duplicate-effect prevention over guaranteed execution.
 
 ## Membership and delivery
 
@@ -89,12 +86,6 @@ Team v2 state is under `${PRJCT_HOME:-~/.prjct}/pi-team/`. Team metadata, member
 Supervised shutdown is bounded and idempotent. Before signaling, pi-team revalidates runtime ownership, PID start token, process group, and token-marked `tmux` metadata. If identity cannot be proven, shutdown is blocked rather than guessed. External peers are never signaled. `/team kill` does not bypass these checks.
 
 This is not a sandbox or authorization boundary. Peers run with the current OS user's permissions, and messages sent to a peer's model go to that peer's configured model provider. Do not send secrets.
-
-## Legacy data
-
-Startup performs only existence checks for the old `~/.pi/agent/teams` and `${PI_CODING_AGENT_DIR:-~/.pi/agent}/managed-teams` roots. It never traverses, migrates, deletes, or signals legacy state automatically.
-
-`/team legacy inspect` is explicit, bounded, shallow, symlink-safe, and read-only. `/team migrate <team>` requires confirmation and creates a collision-free **closed metadata archive** only. It does not copy members, messages, receipts, leases, process ownership, journals, snapshots, worktrees, or managed plans. Source bytes remain untouched. Legacy managed-factory state is inspection-only and cannot be migrated.
 
 ## Limits
 

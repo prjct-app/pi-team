@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -9,7 +9,7 @@ import type { Team } from '../src/domain/team.ts';
 import { withStorageLock } from '../src/storage/atomic.ts';
 import { InboxStore } from '../src/storage/inbox-store.ts';
 import { LeaseStore } from '../src/storage/lease-store.ts';
-import { TeamPaths, detectLegacyRoot } from '../src/storage/paths.ts';
+import { TeamPaths } from '../src/storage/paths.ts';
 import { ReceiptStore } from '../src/storage/receipt-store.ts';
 import { TeamStore } from '../src/storage/team-store.ts';
 
@@ -278,15 +278,4 @@ test('lease replacement fences old tokens and receipts expire only after termina
   now += 2_000;
   assert.equal(await receipts.purgeExpired('shop', 'backend-1'), 1);
   assert.equal(await receipts.read('shop', 'backend-1', 'message-1'), undefined);
-});
-
-test('legacy detection performs a preserve-only root check', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-team-legacy-detect-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const legacy = join(root, 'teams');
-  await mkdir(join(legacy, 'unreadable', 'nested'), { recursive: true, mode: 0o700 });
-  const before = await readdir(legacy);
-  assert.deepEqual(await detectLegacyRoot(legacy), { path: legacy, present: true, kind: 'directory' });
-  assert.deepEqual(await readdir(legacy), before, 'Detection neither migrates nor removes legacy content');
-  assert.equal((await detectLegacyRoot(join(root, 'missing'))).present, false);
 });

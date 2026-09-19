@@ -4,9 +4,9 @@ This document describes the active Team v2 extension. For commands and usage, se
 
 ## Controller and session boundaries
 
-`src/index.ts` composes the domain, storage, runtime, supervisor, command, migration, and UI layers. Loading the extension registers handlers but starts no background work. Membership activates the compact model tool, presence heartbeat, and delivery polling; leaving or shutdown removes them.
+`src/index.ts` composes the domain, storage, runtime, supervisor, command, and UI layers. Loading the extension registers handlers but starts no background work. Membership activates the compact model tool, presence heartbeat, and delivery polling; leaving or shutdown removes them.
 
-Normal prompts are not intercepted. A system-prompt suffix is added only while membership is active. Model actions remain non-destructive; lifecycle, process control, migration, and purge remain slash commands with interactive confirmation where destructive.
+Normal prompts are not intercepted. A system-prompt suffix is added only while membership is active. Model actions remain non-destructive; lifecycle, process control, and purge remain slash commands with interactive confirmation where destructive.
 
 Membership restoration is session-specific:
 
@@ -95,15 +95,9 @@ PID alone is never sufficient. Reuse, changed metadata, corruption, or missing e
 
 Rendering sanitizes terminal controls, truncates by visible width, pairs status icons with text, and caps each section. It derives a compact, standard, or wide list-and-detail layout from the current viewport, bounds output by terminal height, and keeps the selected stable row/member ID visible across resize rather than relying on a mutable array index. Enter toggles inline details where space is limited. Escape closes only the view and explicitly does not claim to cancel operations. Print mode writes the bounded plain formatter directly because Pi's print-mode UI methods are unavailable; RPC mode uses a notification. Pi's JSON mode retains its documented event-stream behavior and does not receive raw text that would corrupt the stream.
 
-## Legacy preservation and migration
+## Closed-team purge
 
-Startup calls `lstat` only to detect the legacy teams and managed-factory roots. It does not traverse them. Importing the legacy modules itself performs no I/O.
-
-Explicit inspection is shallow and bounded by team, entry, file, per-file-byte, and total-byte budgets. It rejects symlinks and unsafe ownership/permissions, opens regular files with `O_NOFOLLOW`, verifies files and directories did not change, and reports metadata without exposing message bodies or tokens. Nested journals, snapshots, worktrees, and arbitrary directories are never traversed.
-
-Explicit migration re-inspects the selected legacy mailbox and compares its hash before atomic publication. It rejects destination collisions and overlapping roots. The destination is a closed v2 team metadata archive. Members, messages, receipts, leases, presence, process ownership, journals, snapshots, worktrees, and managed plans are omitted with reasons. Legacy source bytes are never written, moved, or deleted. Legacy stop sends no process signals because old PID fields do not establish the complete v2 ownership proof. A separate human `/team purge` can remove only a closed v2 team after every member has left and every supervised runtime is terminated; it never touches legacy roots.
-
-The inactive `src/mailbox.ts`, `src/store.ts`, and `src/schema.ts` modules remain only to validate legacy mailbox format during explicit inspection. They are not registered by the extension.
+`/team purge` removes only a closed v2 team after every member has left and every supervised runtime is terminated. It never reads or deletes `~/.pi/agent/teams` or `managed-teams`.
 
 ## Pi APIs
 

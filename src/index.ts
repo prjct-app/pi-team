@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
 import { parseTeamCommand, commandCompletions, TEAM_HELP } from './commands/team-command.ts';
@@ -16,9 +15,7 @@ import { TeamSupervisor, type SupervisorHandoff } from './supervisor/supervisor.
 import { createWorkerBootstrap, type WorkerBootstrap } from './supervisor/worker-bootstrap.ts';
 import { ownerProcessNonce } from './supervisor/supervisor.ts';
 import { loadDashboardSnapshot, openTeamDashboard } from './ui/team-dashboard.ts';
-import { detectLegacyRoot, TeamPaths } from './storage/paths.ts';
-import { inspectLegacy } from './legacy/inspect.ts';
-import { migrateLegacyTeam } from './legacy/migrate.ts';
+import { TeamPaths } from './storage/paths.ts';
 
 const RELOAD_STATE = Symbol.for('prjct.pi-team.reload-state.v2');
 const HEARTBEAT_MS = 10_000;
@@ -28,7 +25,6 @@ const EXTENSION_ENTRY = fileURLToPath(new URL('../index.ts', import.meta.url));
 
 export type InstallTeamOptions = {
   readonly root?: string;
-  readonly legacyRoot?: string;
   readonly heartbeatMs?: number;
   readonly pollMs?: number;
   readonly reloadTtlMs?: number;
@@ -152,8 +148,6 @@ async function safeCwd(value: string): Promise<string> {
 export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}): void {
   const now = options.now ?? Date.now;
   const runtime = new TeamRuntime(new TeamPaths(options.root), now);
-  const legacyTeamsRoot = resolve(options.legacyRoot ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'teams'));
-  const legacyManagedRoot = join(dirname(legacyTeamsRoot), 'managed-teams');
   const slot = { current: INITIAL };
   const get = (): State => slot.current;
   const set = (update: (current: State) => Partial<State>): State =>
@@ -361,50 +355,11 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           notify(`Joined Team ${command.teamId} as ${command.alias}.`);
           return;
         }
-        if (command.action === 'legacy-inspect') {
-          const [teams, managed] = await Promise.all([
-            inspectLegacy({ root: legacyTeamsRoot }),
-            inspectLegacy({ root: legacyManagedRoot }),
-          ]);
-          notify(plain(JSON.stringify({
-            teams,
-            managedFactory: {
-              ...managed,
-              migration: 'unsupported; plans, journals, snapshots, worktrees, and runtime ownership remain preserved',
-            },
-          }, null, 2)));
-          return;
-        }
-        if (command.action === 'legacy-stop') {
-          const [teams, managed] = await Promise.all([
-            inspectLegacy({ root: legacyTeamsRoot }),
-            inspectLegacy({ root: legacyManagedRoot }),
-          ]);
-          const evidence = [...teams.teams, ...managed.teams].filter(team => team.possibleRuntimeMetadata);
-          const approved = await confirm(context, 'Inspect legacy runtime evidence?', `${evidence.length} legacy team record(s) may mention runtimes. Legacy ownership is insufficient for automatic signalling.`);
-          if (!approved) return;
-          notify('No legacy process was signalled. Verify each PID start token, process group, command, cwd, and tmux ownership manually; never use pkill -f.', 'warning');
-          return;
-        }
         if (command.action === 'purge') {
           const approved = await confirm(context, `Permanently purge Team ${command.teamId}?`, 'The Team must already be closed with every member left and every supervised runtime terminated. This deletes its entire v2 record tree and cannot be undone.');
           if (!approved) return;
           await purgeClosedTeam(runtime.paths, runtime.teams, runtime.runtimes, command.teamId);
           notify(`Purged closed Team ${command.teamId}.`);
-          return;
-        }
-        if (command.action === 'migrate') {
-          if (!command.teamId) throw new Error('Usage: /team migrate <legacy-team>');
-          const approved = await confirm(context, `Migrate legacy Team ${command.teamId}?`, 'This creates a closed v2 metadata archive only. Members, messages, runtimes, journals, snapshots, and worktrees remain untouched and are not copied.');
-          if (!approved) return;
-          const result = await migrateLegacyTeam({
-            root: legacyTeamsRoot,
-            destination: runtime.paths,
-            teamName: command.teamId,
-            confirmed: true,
-            importedAt: new Date(now()).toISOString(),
-          });
-          notify(`Migrated closed Team metadata for ${result.team.teamId}; omitted ${result.omitted.members} member(s) and ${result.omitted.messages} message(s).`);
           return;
         }
         const membership = get().membership;
@@ -527,12 +482,10 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           return;
         }
         if (command.action === 'doctor') {
-          const [team, records, owner, legacyTeams, legacyManaged] = await Promise.all([
+          const [team, records, owner] = await Promise.all([
             runtime.teams.read(membership.teamId),
             runtime.runtimes.list(membership.teamId),
             runtime.memberships.assertOwner(membership).then(() => 'valid' as const, () => 'fenced' as const),
-            detectLegacyRoot(legacyTeamsRoot),
-            detectLegacyRoot(legacyManagedRoot),
           ]);
           notify(plain(JSON.stringify({
             team,
@@ -554,7 +507,6 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
               createdAt: record.createdAt,
               updatedAt: record.updatedAt,
             })),
-            legacy: { teams: legacyTeams, managedFactory: legacyManaged },
           }, null, 2)));
           return;
         }
@@ -618,16 +570,6 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
 
   pi.on('session_start', async (event, context) => {
     set(() => ({ ctx: context, closed: false }));
-    const legacyDetections = await Promise.allSettled([
-      detectLegacyRoot(legacyTeamsRoot),
-      detectLegacyRoot(legacyManagedRoot),
-    ]);
-    if (legacyDetections.some(result => result.status === 'fulfilled' && result.value.present)) {
-      notify('Preserved legacy Team data detected. Run /team legacy inspect; no migration or process action was performed.', 'warning');
-    }
-    if (legacyDetections.some(result => result.status === 'rejected')) {
-      notify('A legacy root could not be checked safely; no traversal or process action was attempted.', 'warning');
-    }
     const sessionId = context.sessionManager.getSessionId();
     const workerMembership = event.reason === 'startup' || event.reason === 'reload'
       ? workerMembershipFromEnvironment(process.env, context.cwd)

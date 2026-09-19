@@ -83,7 +83,7 @@ export function registerTeamTool(
   pi.registerTool<typeof TeamToolParameters, unknown>({
     name: TEAM_TOOL_NAME,
     label: 'Team',
-    description: 'Read Team status, exchange bounded peer messages, and coordinate advisory resource claims after this session has joined. Supports status, peers, inbox, read, send, reply, claim, and release; it cannot create, stop, kill, close, migrate, or purge teams.',
+    description: 'Read Team status, exchange bounded peer messages, and coordinate advisory resource claims after this session has joined. Supports status, peers, inbox, read, send, reply, claim, and release; it cannot create, stop, kill, close, or purge teams.',
     promptSnippet: 'Inspect and exchange explicit messages with peers in the joined Team',
     promptGuidelines: [
       'Use the team tool only for collaboration within the currently joined Team.',

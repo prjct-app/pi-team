@@ -1,6 +1,6 @@
 export const TEAM_COMMANDS = [
   'create', 'join', 'start', 'status', 'inbox', 'receive', 'stop', 'kill', 'leave', 'close',
-  'doctor', 'legacy', 'migrate', 'purge',
+  'doctor', 'purge',
 ] as const;
 
 export type TeamCommand =
@@ -10,12 +10,9 @@ export type TeamCommand =
   | { readonly action: 'status' | 'inbox' | 'leave' | 'close' | 'doctor' }
   | { readonly action: 'receive'; readonly messageId: string }
   | { readonly action: 'stop' | 'kill'; readonly alias: string }
-  | { readonly action: 'legacy-inspect' }
-  | { readonly action: 'legacy-stop' }
-  | { readonly action: 'migrate'; readonly teamId?: string }
   | { readonly action: 'purge'; readonly teamId: string };
 
-export const TEAM_HELP = 'Usage: /team create <team> <alias> | join <team> <alias> | start <alias> <existing-cwd> | status | inbox | receive <message-id> | stop <alias> | kill <alias> | leave | close | doctor | legacy inspect | legacy stop | migrate [team] | purge <closed-team>';
+export const TEAM_HELP = 'Usage: /team create <team> <alias> | join <team> <alias> | start <alias> <existing-cwd> | status | inbox | receive <message-id> | stop <alias> | kill <alias> | leave | close | doctor | purge <closed-team>';
 
 function words(input: string): readonly string[] {
   return input.trim().split(/\s+/).filter(Boolean);
@@ -35,20 +32,12 @@ export function parseTeamCommand(input: string): TeamCommand {
   }
   if (action === 'receive' && first && !second) return { action, messageId: first };
   if ((action === 'stop' || action === 'kill') && first && !second) return { action, alias: first };
-  if (action === 'legacy' && first === 'inspect' && !second) return { action: 'legacy-inspect' };
-  if (action === 'legacy' && first === 'stop' && !second) return { action: 'legacy-stop' };
-  if (action === 'migrate' && !second) return { action, ...(first ? { teamId: first } : {}) };
   if (action === 'purge' && first && !second) return { action, teamId: first };
   throw new Error(TEAM_HELP);
 }
 
 export function commandCompletions(prefix: string): { value: string; label: string }[] {
   const input = prefix.trimStart();
-  if (input.startsWith('legacy ')) {
-    return ['inspect', 'stop']
-      .filter(value => value.startsWith(input.slice('legacy '.length)))
-      .map(value => ({ value: `legacy ${value}`, label: `legacy ${value}` }));
-  }
   if (input.includes(' ')) return [];
   return TEAM_COMMANDS.filter(value => value.startsWith(input)).map(value => ({ value, label: value }));
 }

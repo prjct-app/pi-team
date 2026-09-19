@@ -7,11 +7,11 @@ test('human Team command parser exposes lifecycle controls without prompt routin
   assert.deepEqual(parseTeamCommand(''), { action: 'status' });
   assert.deepEqual(parseTeamCommand('create shop lead'), { action: 'create', teamId: 'shop', alias: 'lead' });
   assert.deepEqual(parseTeamCommand('start backend /repo/backend'), { action: 'start', alias: 'backend', cwd: '/repo/backend' });
-  assert.deepEqual(parseTeamCommand('legacy inspect'), { action: 'legacy-inspect' });
-  assert.deepEqual(parseTeamCommand('migrate old-shop'), { action: 'migrate', teamId: 'old-shop' });
   assert.deepEqual(parseTeamCommand('purge old-shop'), { action: 'purge', teamId: 'old-shop' });
+  assert.throws(() => parseTeamCommand('legacy inspect'), /Usage/);
+  assert.throws(() => parseTeamCommand('migrate old-shop'), /Usage/);
   assert.throws(() => parseTeamCommand('plan this objective'), /Usage/);
-  assert.deepEqual(commandCompletions('legacy i'), [{ value: 'legacy inspect', label: 'legacy inspect' }]);
+  assert.deepEqual(commandCompletions('legacy i'), []);
 });
 
 test('supervised membership environment is all-or-nothing and bounded', () => {

@@ -1,31 +1,11 @@
-import { lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { assertEntityId, assertTeamId } from '../domain/team.ts';
-
-export type LegacyDetection = {
-  readonly path: string;
-  readonly present: boolean;
-  readonly kind: 'directory' | 'symlink' | 'other' | 'absent';
-};
 
 export function defaultStorageRoot(environment: NodeJS.ProcessEnv = process.env): string {
   const projectHome = environment.PRJCT_HOME?.trim();
   const base = projectHome ? (isAbsolute(projectHome) ? projectHome : resolve(projectHome)) : join(homedir(), '.prjct');
   return join(base, 'pi-team');
-}
-
-export async function detectLegacyRoot(path = join(homedir(), '.pi', 'agent', 'teams')): Promise<LegacyDetection> {
-  const info = await lstat(path).catch(error => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  });
-  if (!info) return { path, present: false, kind: 'absent' };
-  return {
-    path,
-    present: true,
-    kind: info.isSymbolicLink() ? 'symlink' : info.isDirectory() ? 'directory' : 'other',
-  };
 }
 
 export class TeamPaths {
