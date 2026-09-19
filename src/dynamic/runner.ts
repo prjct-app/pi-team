@@ -11,6 +11,7 @@ import { TeamSupervisor, type SupervisorOptions } from '../supervisor/supervisor
 import type { ExpertExecution, ExpertOutcome, ExpertRunner } from './service.ts';
 import { DynamicStore } from './store.ts';
 import { metadata } from './domain.ts';
+import { expertWorkspace, isGitCheckout } from './workspace.ts';
 
 export type SupervisorPort = Pick<TeamSupervisor, 'launch' | 'stop' | 'close' | 'owner'>;
 type RunnerSetup = { readonly membership: Membership; readonly supervisor: SupervisorPort };
@@ -21,7 +22,10 @@ export type RunnerOptions = {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly pollMs?: number;
   readonly timeoutMs?: number;
+  /** Where a write-capable Expert works. Defaults to its own Git worktree when the project is a checkout. */
+  readonly workspace?: (input: ExpertExecution) => Promise<string>;
 };
+const WRITE_TOOLS = ['edit', 'write', 'bash'];
 // The compiled local build ships index.js; source checkouts execute index.ts directly.
 const ENTRY = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? '../../index.ts' : '../../index.js', import.meta.url));
 
@@ -78,6 +82,10 @@ export class ProductionExpertRunner implements ExpertRunner {
       return this.refresh;
     }
   }
+  private readonly defaultWorkspace = async (input: ExpertExecution): Promise<string> =>
+    await isGitCheckout(input.projectPath)
+      ? expertWorkspace({ root: this.store.root, teamId: input.teamId, expertId: input.expert.id, projectPath: input.projectPath })
+      : input.projectPath;
   run(input: ExpertExecution, signal: AbortSignal): Promise<ExpertOutcome> {
     const operation = this.execute(input, AbortSignal.any([signal, this.closing.signal, AbortSignal.timeout(this.options.timeoutMs ?? 600_000)]));
     this.pending.add(operation);
@@ -98,17 +106,19 @@ export class ProductionExpertRunner implements ExpertRunner {
         throw error;
       });
       if (info && (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0)) throw new Error('Unsafe Expert session.');
+      const writer = input.expert.policy.tools.some(tool => WRITE_TOOLS.includes(tool));
+      const cwd = writer ? await (this.options.workspace ?? this.defaultWorkspace)(input) : input.projectPath;
       if (!info) await createAtomicJson(session, { type: 'session', version: 3, id: input.expert.sessionRef,
-        timestamp: new Date().toISOString(), cwd: input.projectPath });
+        timestamp: new Date().toISOString(), cwd });
       state.peer = await this.runtime.memberships.join({ teamId: input.teamId, alias: `e-${input.expert.id}`,
-        sessionId: input.expert.sessionRef, cwd: input.projectPath, kind: 'supervised' });
-      if (input.expert.policy.tools.some(tool => ['edit', 'write', 'bash'].includes(tool))) {
+        sessionId: input.expert.sessionRef, cwd, kind: 'supervised' });
+      if (writer) {
         state.resource = await this.runtime.resources.claim(state.peer, '.', undefined, signal);
       }
       signal.throwIfAborted();
       const command: readonly [string, ...string[]] = this.options.command ?? (process.argv[1]
         ? [process.execPath, process.argv[1]] : ['pi']);
-      const launched = await supervisor.launch({ memberId: state.peer.memberId, cwd: input.projectPath,
+      const launched = await supervisor.launch({ memberId: state.peer.memberId, cwd,
         workerMembership: state.peer, autoRequests: true, environment: this.options.environment ?? process.env,
         command: [...command,
           '--no-approve', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files',

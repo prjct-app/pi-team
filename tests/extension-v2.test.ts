@@ -51,3 +51,24 @@ for (const reason of ['reload', 'new', 'fork']) test(`${reason} interrupts and f
     await replacement.emit('session_shutdown', { reason: 'quit' });
   } finally { await app.emit('session_shutdown', { reason: 'quit' }); await rm(root, { recursive: true, force: true }); }
 });
+
+test('while a Run is active the orchestrator coordinates: no edit, write or bash until it finishes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'team-orchestrator-')); const app = harness(root);
+  try {
+    app.active.push('edit', 'write', 'bash');
+    await app.emit('session_start');
+    await app.command('Ship three tickets');
+    assert.ok(app.active.includes('team_orchestrate'));
+    for (const name of ['edit', 'write', 'bash']) assert.ok(!app.active.includes(name), `${name} belongs to Experts`);
+    const refusal = await app.emit('tool_call', { toolName: 'edit' });
+    assert.equal(refusal?.block, true);
+    assert.match(refusal.reason, /dispatch this work to an Expert/);
+    assert.equal(await app.emit('tool_call', { toolName: 'read' }), undefined);
+    const prompt = await app.emit('before_agent_start', { systemPrompt: 'base' });
+    assert.match(prompt.systemPrompt, /You coordinate; you do not implement/);
+    assert.match(prompt.systemPrompt, /distinct roles run in parallel/);
+    await app.tools.get('team_orchestrate').execute('id', { action: 'finish', summary: 'Done' });
+    for (const name of ['edit', 'write', 'bash']) assert.ok(app.active.includes(name), `${name} is back after the Run`);
+    assert.equal(await app.emit('tool_call', { toolName: 'edit' }), undefined);
+  } finally { await app.emit('session_shutdown', { reason: 'quit' }); await rm(root, { recursive: true, force: true }); }
+});
