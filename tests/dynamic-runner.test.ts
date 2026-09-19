@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DynamicStore, resolveProject } from '../src/dynamic/store.ts';
 import { DynamicTeamService } from '../src/dynamic/service.ts';
-import { ProductionExpertRunner } from '../src/dynamic/runner.ts';
+import { ProductionExpertRunner, safeReason } from '../src/dynamic/runner.ts';
+import { socketName, shortSocketRoot, SOCKET_PATH_MAX } from '../src/supervisor/supervisor.ts';
 import { parseWorkerRequest } from '../src/dynamic/worker.ts';
 import { TeamRuntime } from '../src/runtime/team-runtime.ts';
 import { TeamPaths } from '../src/storage/paths.ts';
@@ -90,4 +91,19 @@ test('worker request parser rejects malformed, oversized, and extra input', () =
   assert.throws(() => parseWorkerRequest('{'), /JSON/);
   assert.throws(() => parseWorkerRequest(JSON.stringify({ ...valid, extra: true })), /Invalid Expert request body/);
   assert.throws(() => parseWorkerRequest(JSON.stringify({ ...valid, task: 'x'.repeat(8193) })), /Invalid Expert request body|byte limit/);
+});
+
+test('a deep store keeps the control socket under the Unix path limit', () => {
+  const deep = new TeamPaths('/Users/someone-with-a-long-name/.prjct/pi-team/orchestration-v2/transport');
+  const path = socketName(deep, `p-${'a'.repeat(40)}`, 'session', 'b'.repeat(64));
+  assert.ok(Buffer.byteLength(path) <= SOCKET_PATH_MAX, path);
+  assert.ok(path.startsWith(shortSocketRoot()), 'falls back to the short private directory');
+  const shallow = new TeamPaths('/s');
+  assert.match(socketName(shallow, `p-${'a'.repeat(40)}`, 'session', 'b'.repeat(64)), /^\/s\/control\/supervisor-/);
+});
+
+test('why an Expert failed is shown without command arguments or tokens', () => {
+  assert.equal(safeReason(new Error('Supervisor Unix socket path is too long.')), 'Supervisor Unix socket path is too long.');
+  assert.equal(safeReason(Object.assign(new Error('Command failed: tmux new-session -e TOKEN=abc'), { code: 'ENOENT' })), 'tmux could not start the Expert session (ENOENT)');
+  assert.doesNotMatch(safeReason(new Error(`lease ${'f'.repeat(64)} expired`)), /f{32}/);
 });

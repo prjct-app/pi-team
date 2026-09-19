@@ -1,13 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { chmod, lstat, unlink } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   CONTROL_PROTOCOL_VERSION, NdjsonFrameDecoder, assertWorkerFrame, controlTokenMatches, encodeControlFrame,
   type SupervisorFrame, type SupervisorFramePayload, type WorkerFrame,
 } from './control-protocol.ts';
 import { defaultProcessController, sameProcess, type ProcessController } from '../process-identity.ts';
-import { ensurePrivateTree } from '../storage/atomic.ts';
+import { ensurePrivateDirectory, ensurePrivateTree } from '../storage/atomic.ts';
 import { TeamPaths } from '../storage/paths.ts';
 import { TeamStore } from '../storage/team-store.ts';
 import { RuntimeShutdown, type ShutdownReason, type ShutdownResult, type ShutdownTimings } from './shutdown.ts';
@@ -331,10 +331,23 @@ class ControlHub {
   }
 }
 
-function socketName(paths: TeamPaths, teamId: string, ownerSessionId: string, processNonce: string): string {
+/** Unix socket paths fail above ~104 bytes (macOS); the hub refuses more than this. */
+export const SOCKET_PATH_MAX = 100;
+
+/**
+ * The control socket lives in the store's private control directory. A home
+ * directory deep enough to push that path past the Unix limit falls back to a
+ * short private directory under /tmp, owned by this user and mode 0700 (both
+ * checked before listening). Without this, no Expert could ever launch.
+ */
+export function socketName(paths: TeamPaths, teamId: string, ownerSessionId: string, processNonce: string): string {
   const hash = createHash('sha256').update(`${teamId}\0${ownerSessionId}\0${processNonce}`).digest('hex').slice(0, 32);
-  return join(paths.control(), `supervisor-${hash}.sock`);
+  const preferred = join(paths.control(), `supervisor-${hash}.sock`);
+  if (Buffer.byteLength(preferred, 'utf8') <= SOCKET_PATH_MAX) return preferred;
+  return join(shortSocketRoot(), `${hash}.sock`);
 }
+
+export const shortSocketRoot = (): string => join('/tmp', `prjct-team-${process.getuid?.() ?? 'user'}`);
 
 export class TeamSupervisor {
   readonly paths: TeamPaths;
@@ -385,6 +398,8 @@ export class TeamSupervisor {
     this.startPromise = (async () => {
       await ensurePrivateTree(this.paths.root, 'teams');
       await ensurePrivateTree(this.paths.root, 'control');
+      const socketDirectory = dirname(this.hub.socketPath);
+      if (socketDirectory !== this.paths.control()) await ensurePrivateDirectory(socketDirectory);
       await this.hub.start();
     })();
     return this.startPromise;

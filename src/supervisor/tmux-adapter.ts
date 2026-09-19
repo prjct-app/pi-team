@@ -60,6 +60,13 @@ const defaultCommand: TmuxCommand = (program, args, cwd) => new Promise((resolve
   });
 });
 
+/**
+ * An exact-match session target. tmux 3.6 resolves a bare "=name" as a session
+ * for some commands but not for set-option or display-message, which then fail
+ * with "no such session"; "=name:" (session, current window) works for all.
+ */
+export const exact = (session: string): string => `=${session}:`;
+
 function hashToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 
 function sessionName(runtimeId: string): string {
@@ -108,7 +115,7 @@ export class TmuxAdapter {
     if (options.controlToken.length < 64 || options.ownershipToken.length < 64) throw new Error('Runtime control tokens are too short.');
     const session = sessionName(options.runtimeId);
     const tokenHash = hashToken(options.ownershipToken);
-    const target = `=${session}`;
+    const target = exact(session);
     const args = [
       'new-session', '-d', '-s', session, '-c', options.cwd,
       ...clientEnvironment(options.environment),
@@ -149,7 +156,7 @@ export class TmuxAdapter {
   async metadataMatches(runtime: OwnedRuntime): Promise<boolean> {
     if (!runtime.tmuxSession || !runtime.tmuxOwnershipTokenHash) return false;
     const format = `#{${TMUX_RUNTIME_ID}}\t#{${TMUX_OWNER_INSTANCE}}\t#{${TMUX_TOKEN_HASH}}`;
-    const output = await this.run('tmux', ['display-message', '-p', '-t', `=${runtime.tmuxSession}`, format])
+    const output = await this.run('tmux', ['display-message', '-p', '-t', exact(runtime.tmuxSession), format])
       .then(result => result.stdout.trim(), () => '');
     return output === `${runtime.runtimeId}\t${runtime.owner.ownerInstanceId}\t${runtime.tmuxOwnershipTokenHash}`;
   }
@@ -160,7 +167,7 @@ export class TmuxAdapter {
     owner: OwnerIdentity,
     tokenHash: string,
   ): Promise<boolean> {
-    const values = await this.run('tmux', ['show-environment', '-t', `=${session}`])
+    const values = await this.run('tmux', ['show-environment', '-t', exact(session)])
       .then(result => environment(result.stdout), () => new Map<string, string>());
     return values.get(ENV_RUNTIME_ID) === runtimeId && values.get(ENV_OWNER_INSTANCE) === owner.ownerInstanceId &&
       values.get(ENV_OWNER_PROCESS_NONCE) === owner.ownerProcessNonce && values.get(ENV_TOKEN_HASH) === tokenHash;
@@ -170,16 +177,16 @@ export class TmuxAdapter {
     if (!await this.metadataMatches(runtime) || !runtime.tmuxSession) {
       throw Object.assign(new Error('Tmux ownership metadata does not permit handoff.'), { code: 'FENCED' });
     }
-    await this.run('tmux', ['set-option', '-t', `=${runtime.tmuxSession}`, TMUX_OWNER_INSTANCE, owner.ownerInstanceId]);
+    await this.run('tmux', ['set-option', '-t', exact(runtime.tmuxSession), TMUX_OWNER_INSTANCE, owner.ownerInstanceId]);
   }
 
   async killSession(runtime: OwnedRuntime): Promise<boolean> {
     if (!runtime.tmuxSession || !await this.metadataMatches(runtime)) return false;
-    await this.run('tmux', ['kill-session', '-t', `=${runtime.tmuxSession}`]);
+    await this.run('tmux', ['kill-session', '-t', exact(runtime.tmuxSession)]);
     return true;
   }
 
   async sessionExists(session: string): Promise<boolean> {
-    return this.run('tmux', ['has-session', '-t', `=${session}`]).then(() => true, () => false);
+    return this.run('tmux', ['has-session', '-t', exact(session)]).then(() => true, () => false);
   }
 }
