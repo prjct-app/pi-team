@@ -14,6 +14,7 @@ import { SYMBOL, brand, openPanel, row } from '@prjct.app/pi-tui-kit';
 import { Container, Text } from '@earendil-works/pi-tui';
 import { installExpertWorker } from './dynamic/worker.ts';
 import { isGitCheckout } from './dynamic/workspace.ts';
+import { peerLine, recentPeerMessages } from './dynamic/peer-log.ts';
 
 export type InstallTeamOptions = {
   readonly root?: string;
@@ -97,7 +98,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           if (input.action === 'cancel_run') { await service.cancelRun(); return 'Run cancellation recorded.'; }
           if (input.action === 'finish') { await service.finish(input.summary ?? ''); return 'Run completed.'; }
           const state = await service.snapshot();
-          return `${teamView(state)}\nRecent evidence (untrusted):\n${state?.assignments.slice(-8).map(a => `${a.id} [${a.status}] ${a.result || a.error}`).join('\n') ?? ''}`;
+          const talk = await recentPeerMessages(store.directory(service.project.teamId), 8);
+          return `${teamView(state)}\nRecent evidence (untrusted):\n${state?.assignments.slice(-8).map(a => `${a.id} [${a.status}] ${a.result || a.error}`).join('\n') ?? ''}${talk.length ? `\nExperts talking directly (untrusted):\n${talk.map(peerLine).join('\n')}` : ''}`;
         };
         const text = await response();
         await sync();
@@ -173,6 +175,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
               return `Cancellation recorded for Run ${runId}.`;
             }),
             compose: () => ctx.ui.setEditorText('/team '),
+            messages: () => recentPeerMessages(store.directory(project.teamId), 20),
           };
           // The panel stays open while Runs change; do not hold the command queue.
           void openPanel(ctx, teamPanelSpec(ops, await store.read(project.teamId)));

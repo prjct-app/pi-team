@@ -123,7 +123,7 @@ export class ProductionExpertRunner implements ExpertRunner {
         command: [...command,
           '--no-approve', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-context-files',
           '--extension', ENTRY, '--team-store', this.store.root,
-          '--session', session, '--tools', [...input.expert.policy.tools, 'team_reply'].join(','),
+          '--session', session, '--tools', [...input.expert.policy.tools, 'team_reply', 'team_peers', 'team_message'].join(','),
           '--name', `expert:${input.expert.role}`] as [string, ...string[]] });
       state.runtimeId = launched.runtimeId;
       signal.throwIfAborted();

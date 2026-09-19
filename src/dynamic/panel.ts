@@ -1,5 +1,6 @@
 import { SYMBOL, ago, type PanelAction, type PanelItem, type PanelSpec, type Tone } from '@prjct.app/pi-tui-kit';
 import { LIMITS, metadata, type Assignment, type Expert, type Run, type TeamState } from './domain.ts';
+import { peerLine, type PeerEntry } from './peer-log.ts';
 
 /** What the /team panel can ask of the extension. */
 export type TeamOps = Readonly<{
@@ -9,6 +10,8 @@ export type TeamOps = Readonly<{
   cancel(runId: string): Promise<string>;
   /** Close the panel and put "/team " in the editor for a new objective. */
   compose(): void;
+  /** Direct Expert-to-Expert messages, newest last. */
+  messages?(): Promise<readonly PeerEntry[]>;
 }>;
 
 const TEAM = 'team';
@@ -32,9 +35,14 @@ const ASSIGNMENT_MARK: Record<Assignment['status'], string> = {
 
 /** Runs (newest first) and Experts, with every assignment traceable from both sides. */
 export function teamPanelSpec(ops: TeamOps, initial: TeamState | undefined): PanelSpec {
-  const state = { team: initial };
+  const state = { team: initial, talk: [] as readonly PeerEntry[] };
   const listeners = new Set<() => void>();
-  const reload = async (): Promise<void> => { state.team = await ops.load(); for (const listener of listeners) listener(); };
+  const reload = async (): Promise<void> => {
+    state.team = await ops.load();
+    state.talk = await ops.messages?.() ?? [];
+    for (const listener of listeners) listener();
+  };
+  void reload().catch(() => undefined);
   const run = (item: PanelItem | undefined) => item?.id.startsWith(RUN) ? state.team?.runs.find(entry => entry.id === item.id.slice(RUN.length)) : undefined;
   const expert = (id: string) => state.team?.experts.find(entry => entry.id === id);
   const assignmentLine = (assignment: Assignment, by: 'run' | 'expert'): string => {
@@ -98,6 +106,7 @@ export function teamPanelSpec(ops: TeamOps, initial: TeamState | undefined): Pan
       if (item.id.startsWith(EXPERT)) {
         const person = expert(item.id.slice(EXPERT.length))!;
         const work = team.assignments.filter(entry => entry.expertId === person.id).reverse();
+        const talk = [...state.talk].reverse().filter(entry => entry.from === person.role || entry.to === person.role);
         return {
           title: one(person.role, 80),
           subtitle: person.status, subtitleTone: EXPERT_TONE[person.status][1],
@@ -108,7 +117,10 @@ export function teamPanelSpec(ops: TeamOps, initial: TeamState | undefined): Pan
             { label: 'updated', value: ago(time(person.updatedAt)) },
             ...(person.memory ? [{ label: 'memory', value: one(person.memory, 400) }] : []),
           ],
-          sections: [{ title: `Assignments (${work.length})`, lines: work.map(entry => assignmentLine(entry, 'expert')) }],
+          sections: [
+            { title: `Assignments (${work.length})`, lines: work.map(entry => assignmentLine(entry, 'expert')) },
+            { title: 'Messages', lines: talk.map(entry => `${ago(time(entry.at))}  ${peerLine(entry)}`) },
+          ],
         };
       }
       const blocked = team.experts.filter(entry => entry.status === 'blocked').length;
@@ -127,6 +139,7 @@ export function teamPanelSpec(ops: TeamOps, initial: TeamState | undefined): Pan
         sections: [
           ...(team.orchestrator.summary ? [{ title: 'Orchestrator', lines: [one(team.orchestrator.summary, 800)] }] : []),
           { title: 'Recent assignments', lines: team.assignments.slice(-10).reverse().map(entry => assignmentLine(entry, 'run')) },
+          { title: 'Experts talking directly', lines: [...state.talk].reverse().map(entry => `${ago(time(entry.at))}  ${peerLine(entry)}`) },
         ],
       };
     },
