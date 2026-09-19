@@ -19,6 +19,11 @@ export type ServiceOptions = {
   readonly ownerAlive?: (owner: Owner) => Promise<boolean>;
   readonly onRun?: (run: Run, state: TeamState) => void;
   readonly onResult?: (assignment: Assignment) => void;
+  /**
+   * Write-capable Experts each work in their own Git worktree, so they may run
+   * in parallel. Without isolation they share one checkout and run one at a time.
+   */
+  readonly isolatedWriters?: boolean;
 };
 export async function ownerAlive(owner: Owner): Promise<boolean> {
   const identity = await inspectProcess(owner.processPid);
@@ -120,10 +125,10 @@ export class DynamicTeamService {
       const run = state.runs.find(r => r.status === 'active');
       if (!run) throw new Error('No active Run. Start with /team <objective>.');
       if (state.assignments.length >= LIMITS.assignments) throw new Error('Assignment quota reached.');
-      const candidates = state.experts.filter(e => capabilities.every(c => e.capabilities.includes(c)))
-        .sort((a, b) => Number(b.role === role) - Number(a.role === role) || a.id.localeCompare(b.id));
-      const sameRole = state.experts.find(e => e.role === role);
-      const existing = sameRole ?? candidates[0];
+      // A role is one Expert: the same role is reused (and queues while busy),
+      // a different role is a new Expert that can run in parallel. Matching on
+      // capabilities put every "implement/test/pr" task on one Expert, in series.
+      const existing = state.experts.find(e => e.role === role);
       if (existing && !capabilities.every(c => existing.capabilities.includes(c))) throw new Error('Existing role lacks these capabilities; duplicate-role capacity is disabled.');
       if (existing && (existing.policy.tools.length !== input.policy.tools.length || input.policy.tools.some(t => !existing.policy.tools.includes(t)))) {
         throw new Error('Existing Expert tool policy differs; implicit policy changes are forbidden.');
@@ -155,13 +160,14 @@ export class DynamicTeamService {
       const active = state.runs.find(r => r.status === 'active');
       const free = LIMITS.concurrent - state.experts.filter(e => e.status === 'busy' || e.status === 'blocked').length;
       const selected: Assignment[] = [];
-      const writerBusy = state.experts.some(e => e.status === 'busy' && e.policy.tools.some(tool => ['edit', 'write', 'bash'].includes(tool)));
+      const isolated = this.options.isolatedWriters === true;
+      const writerBusy = !isolated && state.experts.some(e => e.status === 'busy' && e.policy.tools.some(tool => ['edit', 'write', 'bash'].includes(tool)));
       for (const a of state.assignments) {
         const expert = state.experts.find(e => e.id === a.expertId);
         const writer = expert?.policy.tools.some(tool => ['edit', 'write', 'bash'].includes(tool)) ?? false;
         if (selected.length >= free) break;
         if (a.runId === active?.id && a.status === 'queued' && expert?.status === 'idle' &&
-            !selected.some(s => s.expertId === a.expertId) && !(writer && (writerBusy || selected.some(s => {
+            !selected.some(s => s.expertId === a.expertId) && !(writer && !isolated && (writerBusy || selected.some(s => {
               const candidate = state.experts.find(e => e.id === s.expertId);
               return candidate?.policy.tools.some(tool => ['edit', 'write', 'bash'].includes(tool));
             })))) selected.push(a);

@@ -28,7 +28,7 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
   }
   assert.fail('Timed out waiting for injected execution state');
 }
-async function fixture() {
+async function fixture(options: { isolatedWriters?: boolean } = {}) {
   const root = await mkdtemp(join(process.cwd(), '.test-dynamic-'));
   const projectPath = join(root, 'project');
   await mkdir(projectPath);
@@ -41,6 +41,7 @@ async function fixture() {
   const service = new DynamicTeamService(store, project, runner, {
     identity, sessionId: 'session-one', instanceId: 'instance-one', ownerAlive: async () => true,
     now: () => 1_700_000_000_000, onRun: run => { turns.push(run.id); }, onResult: a => { results.push(a.id); },
+    ...options,
   });
   const cleanup = async () => { await service.close('test'); await rm(root, { recursive: true, force: true }); };
   return { root, project, store, service, runner, turns, results, cleanup };
@@ -246,5 +247,21 @@ test('schemas, UTF-8 bounds, redaction and symlink-safe reads reject unsafe reco
     assert.ok(!redacted.includes('123456789secret'));
     const alias = join(f.root, 'unsafe'); await symlink(f.store.root, alias);
     await assert.rejects(new DynamicStore(alias).read(f.project.teamId), /Unsafe/);
+  } finally { await f.cleanup(); }
+});
+
+test('different roles with the same capabilities are different Experts and, isolated, write in parallel', async () => {
+  const f = await fixture({ isolatedWriters: true });
+  try {
+    await f.service.submit('Ship three tickets'); await f.service.tick();
+    const work = { capabilities: ['implement', 'test', 'pr'], instructions: 'One ticket.', policy: { tools: ['read', 'edit'] } };
+    const a = await f.service.dispatch({ ...work, role: 'fty-4', task: 'FTY-4' });
+    const b = await f.service.dispatch({ ...work, role: 'fty-74', task: 'FTY-74' });
+    const c = await f.service.dispatch({ ...work, role: 'fty-26', task: 'FTY-26' });
+    assert.deepEqual([a.decision, b.decision, c.decision], ['created', 'created', 'created']);
+    assert.equal(new Set([a.expertId, b.expertId, c.expertId]).size, 3);
+    await until(() => f.runner.calls.length === 3);
+    assert.equal(f.runner.calls.length, 3, 'all three start at once, up to the parallel limit');
+    for (const index of [0, 1, 2]) f.runner.complete(index);
   } finally { await f.cleanup(); }
 });

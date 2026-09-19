@@ -14,7 +14,9 @@ export function parseTeamCommand(input: string): TeamCommand {
   if (!text) return { action: 'status' };
   const [first, ...args] = text.split(/\s+/);
   const action = first!.toLowerCase();
-  if (removed.has(action)) throw new Error(`Unsupported Team command. ${TEAM_HELP}`);
+  // Old lifecycle commands were short ("create shop lead"). A sentence that
+  // merely starts with one of those words ("Create three files…") is an objective.
+  if (removed.has(action) && args.length <= 2) throw new Error(`Unsupported Team command. ${TEAM_HELP}`);
   if (['status', 'history', 'doctor', 'help'].includes(action)) {
     if (args.length) throw new Error(TEAM_HELP);
     return { action: action as 'status' | 'history' | 'doctor' | 'help' };
