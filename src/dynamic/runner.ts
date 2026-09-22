@@ -12,6 +12,7 @@ import type { ExpertExecution, ExpertOutcome, ExpertRunner } from './service.ts'
 import { DynamicStore } from './store.ts';
 import { metadata } from './domain.ts';
 import { expertWorkspace, isGitCheckout } from './workspace.ts';
+import { expertMemory, expertStance, type ExpertStance } from './memory.ts';
 
 export type SupervisorPort = Pick<TeamSupervisor, 'launch' | 'stop' | 'close' | 'owner'>;
 type RunnerSetup = { readonly membership: Membership; readonly supervisor: SupervisorPort };
@@ -24,6 +25,8 @@ export type RunnerOptions = {
   readonly timeoutMs?: number;
   /** Where a write-capable Expert works. Defaults to its own Git worktree when the project is a checkout. */
   readonly workspace?: (input: ExpertExecution) => Promise<string>;
+  /** Project memory for the Expert's stance and task. Defaults to the view pi-memory publishes. */
+  readonly memory?: (stance: ExpertStance, query: string) => Promise<string>;
 };
 const WRITE_TOOLS = ['edit', 'write', 'bash'];
 // The compiled local build ships index.js; source checkouts execute index.ts directly.
@@ -127,9 +130,12 @@ export class ProductionExpertRunner implements ExpertRunner {
           '--name', `expert:${input.expert.role}`] as [string, ...string[]] });
       state.runtimeId = launched.runtimeId;
       signal.throwIfAborted();
+      const memory = await (this.options.memory ?? expertMemory)(expertStance(input.expert.role, input.expert.policy.tools),
+        input.assignment.task).catch(() => '');
+      signal.throwIfAborted();
       const request = await this.runtime.requests.send(membership, { to: state.peer.alias, kind: 'request',
         body: JSON.stringify({ assignmentId: input.assignment.id, generation: input.assignment.generation,
-          ownerEpoch: input.assignment.ownerEpoch, task: input.assignment.task }), signal });
+          ownerEpoch: input.assignment.ownerEpoch, task: input.assignment.task, ...(memory ? { memory } : {}) }), signal });
       state.requestId = request.messageId;
       const heartbeat = { at: 0 };
       while (!signal.aborted) {

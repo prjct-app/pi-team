@@ -7,7 +7,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installTeam } from '../src/index.ts';
 import { DynamicStore, resolveProject } from '../src/dynamic/store.ts';
 
-function harness(root: string) {
+function harness(root: string, complete?: (system: string, user: string) => Promise<string>) {
   const handlers = new Map<string, any>(); const commands = new Map<string, any>(); const tools = new Map<string, any>();
   const active = ['read', 'other']; const turns: string[] = []; const notices: string[] = [];
   const ctx = { cwd: root, hasUI: true, sessionManager: { getSessionId: () => 'session-test' }, ui: { notify: (s: string) => notices.push(s) } };
@@ -16,7 +16,8 @@ function harness(root: string) {
     setActiveTools: (names: string[]) => active.splice(0, active.length, ...names),
     sendUserMessage: (s: string) => turns.push(s), sendMessage() {} } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 60_000, identity: async () => ({ processPid: 4242, processGroupId: 4242, processStartToken: 'test' }),
-    runner: () => ({ run: async () => ({ status: 'completed', summary: 'Verified', stopped: true }), close: async () => {} }) });
+    runner: () => ({ run: async () => ({ status: 'completed', summary: 'Verified', stopped: true }), close: async () => {} }),
+    ...(complete ? { complete } : {}) });
   return { handlers, active, turns, notices, tools, command: (s: string) => commands.get('team').handler(s, ctx),
     emit: (n: string, event: any = {}) => handlers.get(n)?.(event, ctx) };
 }
@@ -64,11 +65,29 @@ test('while a Run is active the orchestrator coordinates: no edit, write or bash
     assert.equal(refusal?.block, true);
     assert.match(refusal.reason, /dispatch this work to an Expert/);
     assert.equal(await app.emit('tool_call', { toolName: 'read' }), undefined);
-    const prompt = await app.emit('before_agent_start', { systemPrompt: 'base' });
-    assert.match(prompt.systemPrompt, /You coordinate; you do not implement/);
-    assert.match(prompt.systemPrompt, /distinct roles run in parallel/);
+    // The role lives on the active tool, never in a per-turn system prompt.
+    assert.equal(await app.emit('before_agent_start', { systemPrompt: 'base' }), undefined);
+    assert.match(app.tools.get('team_orchestrate').description, /You coordinate; you do not implement/);
+    assert.match(app.tools.get('team_orchestrate').description, /distinct roles run in parallel/);
     await app.tools.get('team_orchestrate').execute('id', { action: 'finish', summary: 'Done' });
     for (const name of ['edit', 'write', 'bash']) assert.ok(app.active.includes(name), `${name} is back after the Run`);
     assert.equal(await app.emit('tool_call', { toolName: 'edit' }), undefined);
+  } finally { await app.emit('session_shutdown', { reason: 'quit' }); await rm(root, { recursive: true, force: true }); }
+});
+
+test('a Spanish objective and dispatch reach the orchestrator and Experts in English', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'team-english-'));
+  const asked: string[] = [];
+  const app = harness(root, async (_system, user) => { asked.push(user); return user.startsWith('Agrega') ? 'Add login validation.' : 'Check the email format.'; });
+  try {
+    await app.emit('session_start');
+    await app.command('Agrega la validación del login para que no se puedan mandar correos vacíos');
+    assert.match(app.turns[0]!, /Objective: Add login validation\./);
+    const out = JSON.parse((await app.tools.get('team_orchestrate').execute('id', { action: 'dispatch', dispatch: {
+      role: 'reviewer', capabilities: ['review'], task: 'Revisa que el formato del correo se valide en el servidor', policy: { tools: ['read'] } } })).details.text);
+    assert.ok(out);
+    const state = await new DynamicStore(join(root, 'orchestration-v2')).read((await resolveProject(root)).teamId);
+    assert.equal(state?.assignments[0]?.task, 'Check the email format.');
+    assert.equal(asked.length, 2);
   } finally { await app.emit('session_shutdown', { reason: 'quit' }); await rm(root, { recursive: true, force: true }); }
 });

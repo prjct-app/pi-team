@@ -11,12 +11,27 @@ import { DynamicStore } from './store.ts';
 import { bounded, metadata, type Expert } from './domain.ts';
 import { PEER_KINDS, recordPeerMessage } from './peer-log.ts';
 import { StringEnum } from '@earendil-works/pi-ai';
+import { ENGLISH_RULE, replyLines, replyProblems, replySchema, type Reply } from '@prjct.app/pi-tui-kit';
+
+/**
+ * The stored result of an assignment: the reply rendered by code, so every
+ * Expert's result reads the same to the orchestrator. A malformed reply throws
+ * with what to fix, which reaches the Expert while it can still correct it.
+ */
+export function expertReply(input: unknown): string {
+  const problems = replyProblems(input);
+  if (problems.length) throw new Error(`Not recorded. Fix and call team_reply again: ${problems.join('; ')}`);
+  const reply = input as Reply;
+  return metadata([`kind: ${reply.kind}`, ...replyLines(reply)].join('\n'));
+}
 
 const WorkerRequestSchema = Type.Object({
   assignmentId: EntityIdSchema,
   generation: Type.Integer({ minimum: 1 }),
   ownerEpoch: Type.Integer({ minimum: 1 }),
   task: Type.String({ maxLength: 8192 }),
+  /** Project memory for this Expert's stance, rendered by pi-memory in the orchestrator's process. */
+  memory: Type.Optional(Type.String({ maxLength: 4096 })),
 }, { additionalProperties: false });
 type WorkerRequest = Static<typeof WorkerRequestSchema>;
 
@@ -25,6 +40,7 @@ export function parseWorkerRequest(body: string): WorkerRequest {
   const value: unknown = JSON.parse(body);
   if (!Value.Check(WorkerRequestSchema, value)) throw new Error('Invalid Expert request body.');
   bounded(value.task, 8192, 'Worker task');
+  if (value.memory !== undefined) bounded(value.memory, 4096, 'Worker memory');
   return value;
 }
 
@@ -40,12 +56,16 @@ export function installExpertWorker(pi: ExtensionAPI): void {
   if (!membership) throw new Error('Missing supervised Expert identity.');
   const failClosed = (): void => { slot.closed = true; slot.ctx?.abort(); slot.ctx?.shutdown(); };
   pi.registerTool({
-    name: 'team_reply', label: 'Expert reply', description: 'Send one bounded evidence-based result for the current assignment; do not include secrets.',
-    parameters: Type.Object({ summary: Type.String({ maxLength: 4096 }) }, { additionalProperties: false }),
+    name: 'team_reply', label: 'Expert reply',
+    description: 'Send the result of the current assignment as data, once. Kinds: change (files touched, what changed in each, checks run, what is pending), '
+      + 'answer (direct answer and file references), diagnosis (cause, evidence by file and line, fix status), '
+      + 'needs_input (a decision the orchestrator must make), blocked (why, and what you tried). '
+      + 'Code belongs in files; refer to it by path. Do not include secrets.',
+    parameters: replySchema(),
     execute: async (_id, input, signal) => queue(async () => {
       if (slot.closed || !slot.request || !slot.runtime) throw new Error('No active Expert assignment.');
-      bounded(input.summary, 4096);
-      const result = await slot.runtime.requests.reply(membership, slot.request, metadata(input.summary), signal);
+      const summary = expertReply(input);
+      const result = await slot.runtime.requests.reply(membership, slot.request, summary, signal);
       if (!result.accepted) throw new Error('Assignment result rejected (terminal or fenced).');
       slot.request = undefined;
       slot.bootstrap?.ready();
@@ -74,7 +94,7 @@ export function installExpertWorker(pi: ExtensionAPI): void {
   });
   pi.registerTool({
     name: 'team_message', label: 'Message a teammate',
-    description: 'Message another Expert directly, by role, without going through the orchestrator. Use blocker when their work blocks yours, question to ask, info to share a finding, handoff to pass them something. Answer a teammate the same way.',
+    description: 'Message another Expert directly, by role, without going through the orchestrator. Use blocker when their work blocks yours, question to ask, info to share a finding, handoff to pass them something. Answer a teammate the same way. ' + ENGLISH_RULE,
     parameters: Type.Object({
       to: Type.String({ minLength: 1, maxLength: 64, description: 'The teammate role (see team_peers).' }),
       kind: StringEnum(PEER_KINDS),
@@ -102,7 +122,7 @@ export function installExpertWorker(pi: ExtensionAPI): void {
       return { block: true, reason: 'Outside the active Expert tool policy.' };
     }
   });
-  pi.on('before_agent_start', event => ({ systemPrompt: `${event.systemPrompt}\n\nYou are a persistent Team Expert, not the orchestrator.\nRole: ${slot.expert?.role}\n${slot.expert?.instructions ?? ''}\nBounded prior memory: ${slot.expert?.memory ?? ''}\nWork only on the current assignment. If another Expert's work blocks yours, or you need something from them, message them directly with team_message (see team_peers) instead of waiting for the orchestrator; answer teammates the same way. Finish with team_reply and evidence, never invented success. Tool access is not an OS sandbox. Do not expose credentials.` }));
+  pi.on('before_agent_start', event => ({ systemPrompt: `${event.systemPrompt}\n\nYou are a persistent Team Expert, not the orchestrator.\nRole: ${slot.expert?.role}\n${slot.expert?.instructions ?? ''}\nBounded prior memory: ${slot.expert?.memory ?? ''}\nWork only on the current assignment. If another Expert's work blocks yours, or you need something from them, message them directly with team_message (see team_peers) instead of waiting for the orchestrator; answer teammates the same way. Finish with team_reply: pick the kind that matches what you did and fill its fields with evidence, never invented success. Code stays in files. Tool access is not an OS sandbox. Do not expose credentials.` }));
   /**
    * Messages from teammates arrive mid-work (steer) or open a turn when idle.
    * They are claimed, read and finished once, like any durable message.
@@ -166,7 +186,8 @@ export function installExpertWorker(pi: ExtensionAPI): void {
           throw new Error('Fenced Expert assignment.');
         }
         slot.request = message.messageId; bootstrap.busy(message.messageId);
-        pi.sendUserMessage(`Team assignment ${assignment.id}:\n${assignment.task}\nReturn evidence using team_reply.`, { deliverAs: 'followUp' });
+        const remembered = input.memory?.trim() ? `\n\nWhat this project remembers:\n${input.memory.trim()}` : '';
+        pi.sendUserMessage(`Team assignment ${assignment.id}:\n${assignment.task}${remembered}\nReturn evidence using team_reply.`, { deliverAs: 'followUp' });
       });
     };
     slot.timer = setInterval(() => { void queue(poll).catch(failClosed); }, 500);
