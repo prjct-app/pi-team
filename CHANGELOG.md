@@ -1,3 +1,43 @@
+## [0.7.0](https://github.com/prjct-app/pi-team/compare/v0.6.1...v0.7.0) (2026-09-22)
+
+### Features
+
+* /team completions with descriptions and the prjct mark ([afa687d](https://github.com/prjct-app/pi-team/commit/afa687d2edeba4776f6e200850b6114738914b88))
+* /team is a docked panel of Runs and Experts with traceable assignments ([6f5b025](https://github.com/prjct-app/pi-team/commit/6f5b025a3ad49c8188322e3a98b1d8fca3f0c4df))
+* add durable managed team state ([3380be1](https://github.com/prjct-app/pi-team/commit/3380be1cc4b106041a32c24ff1cfc119b7bc5d3d))
+* add live team plan panel ([58635e2](https://github.com/prjct-app/pi-team/commit/58635e2db7f12fcee407932561c4a29e8d43b79d))
+* add persistent dynamic team orchestration ([0a11bfc](https://github.com/prjct-app/pi-team/commit/0a11bfc25b2a3ca910dcfa01cfedf12dc9819ab5)), closes [#49](https://github.com/prjct-app/pi-team/issues/49)
+* add persistent dynamic team orchestration ([57c8d03](https://github.com/prjct-app/pi-team/commit/57c8d0350b53bad0e963debbf79e5b39c28c1c4e))
+* add Team v2 messaging runtime ([d0df88f](https://github.com/prjct-app/pi-team/commit/d0df88fbbfa57ffe4a7ad7373bd18d6591db7c54))
+* add Team v2 storage core ([b75d230](https://github.com/prjct-app/pi-team/commit/b75d2306efc5670fd51668658bb536d3a19b4e41))
+* add Team v2 supervised peer lifecycle ([3415872](https://github.com/prjct-app/pi-team/commit/3415872ab6a6bb6076736f1d2981f174a90551eb))
+* Experts message each other directly (team_peers, team_message) ([298188f](https://github.com/prjct-app/pi-team/commit/298188f1037ff492955040088d262af165468638))
+* integrate Team v2 extension ([81c64da](https://github.com/prjct-app/pi-team/commit/81c64da3c3b28ddb4c7e34bd811dda6d502a4922))
+* isolate managed agents in worktrees ([35a68a3](https://github.com/prjct-app/pi-team/commit/35a68a3751e962ad260c07b54d70a21b45289b1b))
+* keep an unattended teammate reachable after the auto-turn cap ([e354af4](https://github.com/prjct-app/pi-team/commit/e354af44dafc49171129ccf76f6213b10d35536e))
+* launch autonomous teams from prompts ([6b72638](https://github.com/prjct-app/pi-team/commit/6b7263815dc6a0c4cca5b785211b1b5eb23a5b07))
+* link team requests to optional subagents ([c51722f](https://github.com/prjct-app/pi-team/commit/c51722feac67405705ca3ddd69564bf6825a2bbc))
+* run managed peers in persistent terminals ([4376b08](https://github.com/prjct-app/pi-team/commit/4376b08c331707263deb49af119c909ae85a75de))
+* run persistent managed peer sessions ([6b2e249](https://github.com/prjct-app/pi-team/commit/6b2e249f82499d1a988e11c07a9d3fc54c1ee393))
+* schedule managed work from dependencies ([18c5817](https://github.com/prjct-app/pi-team/commit/18c5817c890a08c212856fcf36ef4d87769b6cdb))
+* send each Expert the project memory for its stance ([36caefc](https://github.com/prjct-app/pi-team/commit/36caefc442b7dcbfe5a00c26bbe97fb69f13b561))
+
+### Bug Fixes
+
+* a real parallel team — one Expert per role, own worktree each, orchestrator only coordinates ([140091d](https://github.com/prjct-app/pi-team/commit/140091d331ec75195a225f874847df601aa64dac))
+* accept objectives through team command ([8f05337](https://github.com/prjct-app/pi-team/commit/8f05337c26a7f6cef7c4cafe7de2581c3c89d2ad))
+* Experts launch again: short control socket, tmux 3.6 targets, lease token shape ([22c185b](https://github.com/prjct-app/pi-team/commit/22c185b49c91e0bedeb347795fca94df22477e1e))
+* expose the authorized integration target ([f1bf132](https://github.com/prjct-app/pi-team/commit/f1bf13268985f92ff9866b9003a253908620deb0))
+* harden managed runtime shutdown ([316cf72](https://github.com/prjct-app/pi-team/commit/316cf7218c7e6f27f11be4ef825a8447921cd97b))
+* harden managed team records ([652e8d3](https://github.com/prjct-app/pi-team/commit/652e8d3cc4aef61280c8bbbadb6c1a16b3b65ae7))
+* isolate managed peer extensions ([b69e02c](https://github.com/prjct-app/pi-team/commit/b69e02cf64b3c7ff41d039f95d36dc448a8a4a2a))
+* keep worktree locks for the duration of git and refuse secret commits ([0d8c427](https://github.com/prjct-app/pi-team/commit/0d8c42783cc231b7464c79ec11c2373e8db74c05))
+* only create and check the short socket fallback directory ([990f2a6](https://github.com/prjct-app/pi-team/commit/990f2a67650b5bc12542fd90ac0650675cbb8750))
+* preserve lead checkout during managed work ([54e3159](https://github.com/prjct-app/pi-team/commit/54e3159368e36880305481c6fedf18edf9218c76))
+* reject conflicting managed objectives ([5102c8b](https://github.com/prjct-app/pi-team/commit/5102c8b40bdc33f40eba4b18fad6d690b29b87b0))
+* reject presence symlinks, redact more credentials, and bound the read cache ([c55bd27](https://github.com/prjct-app/pi-team/commit/c55bd27565441a86f711a4b8046cd7bbadeefa86))
+* sanitize git and verification subprocess environments ([b4819bf](https://github.com/prjct-app/pi-team/commit/b4819bf37b5615e249cb2ca8b60557dd21dd913c))
+
 ## Unreleased
 
 - Add `npm run build:pi`: a compiled local build in `~/.pi/agent/builds/<package>` that Pi loads instead of the TypeScript sources; supervised workers launch the built entry.
