@@ -29,7 +29,7 @@ function terminal(root: string, sessionId: string, entries: unknown[] = []) {
   } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 10, complete: async (_s, user) => user });
   return {
-    active, notices, sent, status, idle, entries, tools,
+    active, notices, sent, status, idle, entries, tools, root,
     command: (s: string) => commands.get('team').handler(s, ctx),
     commandWith: (s: string, extra: { mode?: string; ui?: Record<string, unknown> }) =>
       commands.get('team').handler(s, { ...ctx, ...extra, ui: { ...ctx.ui, setEditorText() {}, ...extra.ui } }),
@@ -172,40 +172,102 @@ test('teammates cannot ping-pong forever: turns stop after the limit until the p
   assert.equal(a.sent.at(-1)!.options.triggerTurn, true);
 });
 
-test('the panel lists teammates with live activity and the message trace', async () => {
+test('the panel lists every team with its members, and the timeline in detail', async () => {
   const { teamPanelSpec } = await import('../src/team/panel.ts');
   const now = Date.parse('2026-09-23T12:00:00.000Z');
-  const snapshot = {
-    joined: { team: 'shop', role: 'reviewer' },
+  const shop = {
+    team: 'shop',
     mates: [
       { role: 'backend', online: true, cwd: '/w/b', self: false, activity: { state: 'working' as const, since: '2026-09-23T11:57:00.000Z', focus: 'Implement login' } },
       { role: 'reviewer', online: true, cwd: '/w/r', self: true, activity: { state: 'idle' as const, since: '2026-09-23T11:59:50.000Z' } },
       { role: 'docs', online: false, cwd: '/w/d', self: false },
     ],
-    log: [{ at: '2026-09-23T11:58:00.000Z', from: 'reviewer', to: 'backend', kind: 'question' as const, body: 'Which code?' }],
-    teams: [],
+    events: [
+      { at: '2026-09-23T11:57:00.000Z', type: 'working' as const, role: 'backend', text: 'Implement login' },
+      { at: '2026-09-23T11:58:00.000Z', type: 'message' as const, role: 'reviewer', to: 'backend', kind: 'question' as const, text: 'Which code?' },
+      { at: '2026-09-23T11:59:00.000Z', type: 'refused' as const, role: 'reviewer', to: 'docs', kind: 'info' as const, text: 'offline' },
+    ],
   };
-  const composed: string[] = [];
-  const spec = teamPanelSpec({ load: async () => snapshot, compose: text => composed.push(text), leave: async () => 'Left team shop.', now: () => now }, snapshot);
-  assert.match(spec.summary!(), /shop · you are reviewer · 2 online · 1 working/);
+  const other = { team: 'infra', mates: [{ role: 'ops', online: true, cwd: '/w/o', self: false }], events: [] };
+  const snapshot = { joined: { team: 'shop', role: 'reviewer' }, teams: [shop, other] };
+  const requests: unknown[] = [];
+  const spec = teamPanelSpec({ load: async () => snapshot, request: intent => requests.push(intent), leave: async () => 'Left team shop.', now: () => now }, snapshot);
+  assert.match(spec.summary!(), /you are reviewer in shop · 2 teams/);
   const items = spec.items();
-  assert.deepEqual(items.map(item => [item.label, item.meta]), [['shop', '1 messages'], ['backend', 'working 3m'], ['reviewer (you)', 'idle 10s'], ['docs', 'offline']]);
-  const detail = spec.detail(items[1]!);
-  assert.equal(detail.fields![0]!.value, 'Implement login');
-  assert.match(detail.sections![0]!.lines[0]!, /reviewer → backend question: Which code\?/);
-  const message = spec.actions!.find(action => action.key === 'm')!;
-  assert.equal(message.when!(items[1]), true);
-  assert.equal(message.when!(items[2]), false, 'Not to yourself');
-  assert.equal(message.when!(items[3]), false, 'Not to someone offline');
-  await message.run(items[1], { close() {}, refresh() {}, notice() {}, select() {} });
-  assert.deepEqual(composed, ['/team send backend ']);
+  assert.deepEqual(items.map(item => [item.label, item.meta]), [
+    ['shop', '2/3 online · 1 working · you'], ['  backend', 'working 3m'], ['  reviewer (you)', 'idle 10s'], ['  docs', 'offline'],
+    ['infra', '1/1 online'], ['  ops', 'online'],
+  ]);
+  const team = spec.detail(items[0]!);
+  const timeline = team.sections!.find(section => section.title.startsWith('Timeline'))!.lines;
+  assert.equal(timeline.length, 3);
+  assert.match(timeline[0]!, /reviewer → docs info refused \(offline\)/);
+  assert.match(timeline[1]!, /reviewer → backend question: Which code\?/);
+  assert.match(timeline[2]!, /backend working · Implement login/);
+  const backend = spec.detail(items[1]!);
+  assert.equal(backend.fields![0]!.value, 'Implement login');
+  assert.equal(backend.sections![0]!.lines.length, 2, 'Only what involves backend');
+
+  const control = { close() {}, refresh() {}, notice() {}, select() {} };
+  const key = (k: string) => spec.actions!.find(action => action.key === k)!;
+  assert.equal(key('m').when!(items[1]), true);
+  assert.equal(key('m').when!(items[2]), false, 'Not to yourself');
+  assert.equal(key('m').when!(items[3]), false, 'Not to someone offline');
+  assert.equal(key('m').when!(items[5]), false, 'Not into a team you are not in');
+  assert.equal(key('a').when!(items[0]), false, 'Already in shop');
+  assert.equal(key('a').when!(items[4]), true);
+  await key('m').run(items[1], control);
+  await key('a').run(items[4], control);
+  await key('n').run(undefined, control);
+  assert.deepEqual(requests, [{ action: 'message', team: 'shop', role: 'backend' }, { action: 'join', team: 'infra' }, { action: 'create' }]);
 });
 
+test('the team timeline records joins, work, messages, refusals and leaves', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  await a.emit('before_agent_start', { prompt: 'Implement login', systemPrompt: 'base' });
+  await b.tool('team_message', { to: 'backend', kind: 'question', body: 'Which code?' });
+  await b.tool('team_message', { to: 'docs', kind: 'info', body: 'hi' }).catch(() => {});
+  await a.command('leave');
+  const { TeamSession } = await import('../src/team/session.ts');
+  const { TeamRuntime } = await import('../src/runtime/team-runtime.ts');
+  const { TeamPaths } = await import('../src/storage/paths.ts');
+  const reader = new TeamSession(new TeamRuntime(new TeamPaths(a.root)));
+  const seen = { types: [] as string[] };
+  await until(() => seen.types.includes('left'), 2000, async () => {
+    seen.types = (await reader.events('shop')).map(event => `${event.type}`);
+  });
+  const events = await reader.events('shop');
+  assert.deepEqual(events.map(event => [event.type, event.role, event.to ?? '']), [
+    ['joined', 'backend', ''], ['joined', 'reviewer', ''], ['working', 'backend', ''],
+    ['message', 'reviewer', 'backend'], ['refused', 'reviewer', 'docs'], ['left', 'backend', ''],
+  ]);
+});
+
+test('from the panel: create a team, then message a teammate, with typed input', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await b.command('join shop reviewer');
+  const answers = ['infra', 'ops'];
+  const panels: any[] = [];
+  const custom = (factory: any) => new Promise(resolve => {
+    const tui = { requestRender() {}, terminal: { rows: 30, columns: 120 } };
+    const theme = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
+    panels.push(factory(tui, theme, {}, resolve));
+  });
+  await a.commandWith('', { mode: 'tui', ui: { custom, input: async () => answers.shift() } });
+  await until(() => panels.length === 1);
+  panels[0].handleInput('n');
+  await until(() => panels.length === 2);
+  assert.equal(a.status.text, 'team infra · ops');
+  assert.match(a.notices.join('\n'), /Created and joined team infra as ops/);
+});
 test('/team opens the docked panel in the TUI', async (t) => {
   const make = await setup(t);
   const a = await make('s-a');
   await a.command('join shop backend');
   const opened: unknown[] = [];
   await a.commandWith('', { mode: 'tui', ui: { custom: (factory: unknown) => { opened.push(factory); return new Promise(() => {}); } } });
-  assert.equal(opened.length, 1);
+  await until(() => opened.length === 1);
 });

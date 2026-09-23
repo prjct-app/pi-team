@@ -8,7 +8,8 @@ import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
 import { MAX_BODY_BYTES, MESSAGE_KINDS, TeamSession, type Incoming, type Teammate } from './team/session.ts';
 import { ago, clean } from './team/text.ts';
-import { teamPanelSpec, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
+import { memberItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
+import { TEAM_ID_PATTERN } from './domain/team.ts';
 
 export type InstallTeamOptions = {
   /** Storage root; defaults to ${PRJCT_HOME:-~/.prjct}/pi-team. */
@@ -138,12 +139,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
 
   const snapshot = async (): Promise<TeamSnapshot> => {
     const joined = session.current();
-    return {
-      ...(joined ? { joined: { team: joined.team, role: joined.role } } : {}),
-      mates: await session.teammates(),
-      log: await session.recent(),
-      teams: joined ? [] : await session.overview(),
-    };
+    return { ...(joined ? { joined: { team: joined.team, role: joined.role } } : {}), teams: await session.overview() };
   };
   const leaveTeam = async (): Promise<string> => {
     const left = await session.leave();
@@ -160,6 +156,52 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return created;
   };
   const dropMembership = (): void => { toolsOn(false); showMembership(); };
+  /** Join, remember it in the session, and say so. */
+  const enter = async (ctx: ExtensionContext, team: string, role: string): Promise<string> => {
+    const created = await joinTeam(ctx, team, role);
+    pi.appendEntry<Membership>(ENTRY, { team, role });
+    return `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
+  };
+  const sendFromPerson = async (ctx: ExtensionContext, to: string, text: string): Promise<void> => {
+    const body = await toEnglishInstructions(text, options.complete ?? cheapComplete(ctx));
+    await session.send(to, 'info', `From the person at this terminal: ${body}`);
+  };
+
+  /** Asks for what the panel action needs; returns the row to select when the panel opens again. */
+  const fulfil = async (ctx: ExtensionContext, intent: TeamIntent): Promise<string | undefined> => {
+    const ask = async (title: string, placeholder: string, valid?: RegExp): Promise<string | undefined> => {
+      const value = (await ctx.ui.input(title, placeholder))?.trim();
+      if (!value) return undefined;
+      if (valid && !valid.test(value)) throw new Error(`"${value}" is not valid: use 1–48 lowercase letters, digits or hyphens, starting with a letter.`);
+      return value;
+    };
+    if (intent.action === 'message') {
+      const text = await ask(`Message to ${intent.role}`, 'Delivered now; nothing queues');
+      if (!text) return memberItemId(intent.team, intent.role);
+      await queue(() => sendFromPerson(ctx, intent.role, text));
+      output(`Delivered to ${intent.role}.`);
+      return memberItemId(intent.team, intent.role);
+    }
+    const team = intent.action === 'join' ? intent.team : await ask('New team name', 'shop', TEAM_ID_PATTERN);
+    if (!team) return undefined;
+    const role = await ask(`Your role in ${team}`, 'backend', TEAM_ID_PATTERN);
+    if (!role) return undefined;
+    output(await queue(() => enter(ctx, team, role)));
+    return memberItemId(team, role);
+  };
+  /** The panel; actions that need typed input close it, ask, and open it again. */
+  const openTeamPanel = async (ctx: ExtensionContext, select?: string): Promise<void> => {
+    const pending: { intent?: TeamIntent } = {};
+    const ops: TeamPanelOps = { load: () => queue(snapshot), request: intent => { pending.intent = intent; }, leave: () => queue(leaveTeam), now };
+    await openPanel(ctx, teamPanelSpec(ops, await queue(snapshot), select));
+    const intent = pending.intent;
+    if (!intent || store.get().closed) return;
+    const next = await fulfil(ctx, intent).catch(error => {
+      output(clean(error instanceof Error ? error.message : 'Team action failed.', 512), 'error');
+      return select;
+    });
+    await openTeamPanel(ctx, next);
+  };
 
   const deliver = (ctx: ExtensionContext, message: Incoming): void => {
     const idle = ctx.isIdle();
@@ -202,28 +244,16 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
         if (command.action === 'status') {
           await refreshCompletions();
           if (ctx.mode === 'tui' && ctx.hasUI && typeof ctx.ui.custom === 'function') {
-            const ops: TeamPanelOps = {
-              load: () => queue(snapshot),
-              compose: text => ctx.ui.setEditorText(text),
-              leave: () => queue(leaveTeam),
-              now,
-            };
-            // The panel stays open while teammates change; it must not hold the command queue.
-            void openPanel(ctx, teamPanelSpec(ops, await snapshot()));
+            // The panel stays open while teams change; it must not hold the command queue.
+            void openTeamPanel(ctx).catch(() => {});
             return;
           }
           output(await statusText());
           return;
         }
         if (command.action === 'leave') { output(await leaveTeam()); return; }
-        if (command.action === 'join') {
-          const created = await joinTeam(ctx, command.team, command.role);
-          pi.appendEntry<Membership>(ENTRY, { team: command.team, role: command.role });
-          output(`${created ? 'Created and joined' : 'Joined'} team ${command.team} as ${command.role}.\n${await statusText()}`);
-          return;
-        }
-        const body = await toEnglishInstructions(command.body, options.complete ?? cheapComplete(ctx));
-        await session.send(command.to, 'info', `From the person at this terminal: ${body}`);
+        if (command.action === 'join') { output(`${await enter(ctx, command.team, command.role)}\n${await statusText()}`); return; }
+        await sendFromPerson(ctx, command.to, command.body);
         output(`Delivered to ${command.to}.`);
       } catch (error) { output(clean(error instanceof Error ? error.message : 'Team command failed.', 512), 'error'); }
     }),

@@ -32,16 +32,35 @@ export type Teammate = {
   readonly self: boolean;
   readonly activity?: Activity;
 };
-/** One message as the panel shows it: who talked to whom, and when. */
-export type LogEntry = { readonly at: string; readonly from: string; readonly to: string; readonly kind: MessageKind; readonly body: string };
-const LogSchema = Type.Array(Type.Object({
-  at: TimestampSchema, from: Type.String({ maxLength: 48 }), to: Type.String({ maxLength: 48 }),
-  kind: Type.Union(MESSAGE_KINDS.map(kind => Type.Literal(kind))), body: Type.String({ maxLength: 600 }),
-}, { additionalProperties: false }), { maxItems: 100 });
-const assertLog = (value: unknown): asserts value is LogEntry[] => {
-  if (!Value.Check(LogSchema, value)) throw new Error('Invalid team message log.');
+/**
+ * One thing that happened in a team, for the timeline: who joined or left,
+ * who started or stopped working and on what, every message, every refused send.
+ */
+export const EVENT_TYPES = ['joined', 'left', 'working', 'idle', 'message', 'refused'] as const;
+export type TeamEvent = {
+  readonly at: string;
+  readonly type: (typeof EVENT_TYPES)[number];
+  readonly role: string;
+  readonly to?: string;
+  readonly kind?: MessageKind;
+  readonly text?: string;
 };
-const LOG_KEEP = 100;
+const EventsSchema = Type.Array(Type.Object({
+  at: TimestampSchema,
+  type: Type.Union(EVENT_TYPES.map(type => Type.Literal(type))),
+  role: Type.String({ maxLength: 48 }),
+  to: Type.Optional(Type.String({ maxLength: 48 })),
+  kind: Type.Optional(Type.Union(MESSAGE_KINDS.map(kind => Type.Literal(kind)))),
+  text: Type.Optional(Type.String({ maxLength: 1200 })),
+}, { additionalProperties: false }), { maxItems: 300 });
+const assertEvents = (value: unknown): asserts value is TeamEvent[] => {
+  if (!Value.Check(EventsSchema, value)) throw new Error('Invalid team timeline.');
+};
+const EVENTS_KEEP = 300;
+const EVENTS_BYTES = 512 * 1024;
+
+/** A team with its members, as the panel lists every team on disk. */
+export type TeamOverview = { readonly team: string; readonly mates: readonly Teammate[]; readonly events: readonly TeamEvent[] };
 
 export type Incoming = { readonly from: string; readonly kind: MessageKind; readonly body: string };
 export type Joined = { readonly team: string; readonly role: string; readonly membership: Membership };
@@ -83,6 +102,7 @@ export class TeamSession {
         throw error;
       });
     this.state.set(() => ({ team, role, membership }));
+    await this.record(team, { type: 'joined', role, text: input.cwd });
     await this.setActivity({ state: 'idle', since: timestamp });
     return { created };
   }
@@ -92,6 +112,7 @@ export class TeamSession {
     if (!joined) return undefined;
     this.state.set(() => undefined);
     await this.runtime.memberships.leave(joined.membership).catch(() => {});
+    await this.record(joined.team, { type: 'left', role: joined.role });
     return joined;
   }
 
@@ -114,7 +135,14 @@ export class TeamSession {
     const directory = join(this.runtime.paths.team(joined.team), 'activity');
     await ensurePrivateDirectory(directory);
     const record = { ...activity, ...(activity.focus ? { focus: clean(activity.focus, 512) } : {}) };
-    await replaceAtomicJson(this.activityPath(joined.team, joined.membership.memberId), record, { maxBytes: 2048 });
+    const path = this.activityPath(joined.team, joined.membership.memberId);
+    const previous = await readJson(path, assertActivity, 2048).catch(() => undefined);
+    await replaceAtomicJson(path, record, { maxBytes: 2048 });
+    // The timeline keeps changes only: a new state, or new work while working. Joining already says idle.
+    const changed = previous ? previous.state !== record.state : record.state === 'working';
+    if (changed || (record.state === 'working' && previous?.focus !== record.focus)) {
+      await this.record(joined.team, { type: record.state, role: joined.role, ...(record.state === 'working' && record.focus ? { text: record.focus } : {}) });
+    }
   }
 
   /** Everyone in the joined team (or `team`), newest record per role, with live activity. */
@@ -142,35 +170,41 @@ export class TeamSession {
     if (to === joined.role) throw new Error('That is you. Message another role.');
     bounded(body, MAX_BODY_BYTES, 'Message');
     const target = (await this.teammates(joined.team)).find(mate => mate.role === to);
-    if (!target) throw new Error(`No "${to}" in team ${joined.team}.`);
-    if (!target.online) throw new Error(`${to} is offline, so nothing was sent. Do not wait for them: carry on with your own work.`);
+    const refusal = !target ? `No "${to}" in team ${joined.team}.`
+      : !target.online ? `${to} is offline, so nothing was sent. Do not wait for them: carry on with your own work.` : undefined;
+    if (refusal) {
+      await this.record(joined.team, { type: 'refused', role: joined.role, to, kind, text: target ? 'offline' : 'no such role' });
+      throw new Error(refusal);
+    }
     await this.runtime.requests.send(joined.membership, { to, kind, body: clean(body, MAX_BODY_BYTES), ttlMs: MESSAGE_TTL_MS });
-    await this.record(joined.team, { at: new Date(this.now()).toISOString(), from: joined.role, to, kind, body: clean(body, 300) }).catch(() => {});
+    await this.record(joined.team, { type: 'message', role: joined.role, to, kind, text: body });
   }
 
-  private logPath(team: string): string { return join(this.runtime.paths.team(team), 'messages.json'); }
+  private eventsPath(team: string): string { return join(this.runtime.paths.team(team), 'events.json'); }
 
-  /** The trace behind the panel. The message itself travels through the inbox. */
-  private async record(team: string, entry: LogEntry): Promise<void> {
-    await withStorageLock(this.runtime.paths.lock(`log-${team}`), async () => {
-      const log = await readJson(this.logPath(team), assertLog, 128 * 1024).catch(() => undefined) ?? [];
-      await replaceAtomicJson(this.logPath(team), [...log, entry].slice(-LOG_KEEP), { maxBytes: 128 * 1024 });
-    });
+  /** Appends to the team timeline. Best-effort: tracing never blocks the work it traces. */
+  private async record(team: string, event: Omit<TeamEvent, 'at'>): Promise<void> {
+    const entry: TeamEvent = { ...event, at: new Date(this.now()).toISOString(), ...(event.text ? { text: clean(event.text, 1200) } : {}) };
+    await withStorageLock(this.runtime.paths.lock(`events-${team}`), async () => {
+      const events = await this.events(team);
+      await replaceAtomicJson(this.eventsPath(team), [...events, entry].slice(-EVENTS_KEEP), { maxBytes: EVENTS_BYTES });
+    }).catch(() => {});
   }
 
-  /** Recent messages in the joined team (or `team`), oldest first. */
-  async recent(team = this.state.get()?.team): Promise<LogEntry[]> {
+  /** The team timeline (the joined team by default), oldest first. */
+  async events(team = this.state.get()?.team): Promise<TeamEvent[]> {
     if (!team) return [];
-    return await readJson(this.logPath(team), assertLog, 128 * 1024).catch(() => undefined) ?? [];
+    return await readJson(this.eventsPath(team), assertEvents, EVENTS_BYTES).catch(() => undefined) ?? [];
   }
 
-  /** Every team on disk with how many are online, for the panel when this terminal is in none. */
-  async overview(): Promise<{ readonly team: string; readonly online: number; readonly total: number }[]> {
+  /** Every team on disk with its members and timeline, the joined one first. */
+  async overview(): Promise<TeamOverview[]> {
+    const joined = this.state.get()?.team;
     const teams = await this.teams();
-    return Promise.all(teams.map(async team => {
-      const mates = await this.teammates(team).catch(() => []);
-      return { team, online: mates.filter(mate => mate.online).length, total: mates.length };
-    }));
+    const all = await Promise.all(teams.map(async team => ({
+      team, mates: await this.teammates(team).catch(() => []), events: await this.events(team),
+    })));
+    return all.sort((a, b) => Number(b.team === joined) - Number(a.team === joined) || a.team.localeCompare(b.team));
   }
 
   /** Takes every message waiting for this terminal, each exactly once. */

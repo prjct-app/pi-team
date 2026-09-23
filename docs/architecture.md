@@ -20,9 +20,11 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 
 `index.ts` delivers a received message with `sendMessage`. A busy terminal gets it steered into its running turn. An idle one gets a new turn, up to `AUTO_TURN_LIMIT` (6) consecutive teammate-opened turns. After that, messages are shown without triggering a turn until interactive input resets the counter. Delivered content is one header line plus the body; nothing else is added to context.
 
-## Panel
+## Panel and timeline
 
-`src/team/panel.ts` builds the `/team` panel on the shared pi-tui-kit docked panel. It reloads a snapshot every second: teammates, their activity, and the team's message trace (`teams/<team>/messages.json`, the last 100 messages, written on send). The panel does not hold the command queue.
+`src/team/panel.ts` builds the `/team` panel on the shared pi-tui-kit docked panel. It lists every team on disk, each with its members, and reloads every second. Team detail shows the members and the whole timeline; member detail shows that member's activity and its part of the timeline. Actions that need typed input (`n` create, `a`/Enter join, `m` message) close the panel, ask with `ctx.ui.input`, act, and reopen it on the affected row. The panel never holds the command queue.
+
+`TeamSession.record` appends to `teams/<team>/events.json` (the last 300 events, under a storage lock): `joined` (with cwd), `left`, `working` (with focus, only when state or focus changes), `idle`, `message` (full text), and `refused` (offline or unknown recipient). Tracing is best-effort and never blocks the work it traces.
 
 ## Transport
 

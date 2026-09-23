@@ -1,31 +1,40 @@
 import { SYMBOL, ago, type PanelAction, type PanelItem, type PanelSpec, type Tone } from '@prjct.app/pi-tui-kit';
-import type { LogEntry, Teammate } from './session.ts';
+import type { TeamEvent, TeamOverview, Teammate } from './session.ts';
 
-/** Everything the panel shows, loaded in one go and refreshed while it is open. */
+/** Everything the panel shows: every team on disk, its members and its timeline. */
 export type TeamSnapshot = {
   readonly joined?: { readonly team: string; readonly role: string };
-  readonly mates: readonly Teammate[];
-  readonly log: readonly LogEntry[];
-  readonly teams: readonly { readonly team: string; readonly online: number; readonly total: number }[];
+  readonly teams: readonly TeamOverview[];
 };
 
-/** What the /team panel can ask of the extension. */
+/**
+ * What the person asked for from the panel that needs typed input. The panel
+ * closes, the extension asks, does it, and opens the panel again on `select`.
+ */
+export type TeamIntent =
+  | { readonly action: 'create' }
+  | { readonly action: 'join'; readonly team: string }
+  | { readonly action: 'message'; readonly team: string; readonly role: string };
+
 export type TeamPanelOps = Readonly<{
   load(): Promise<TeamSnapshot>;
-  /** Close the panel and leave `text` in the editor. */
-  compose(text: string): void;
+  /** Close the panel and handle what needs input. */
+  request(intent: TeamIntent): void;
   leave(): Promise<string>;
   now(): number;
 }>;
 
-const TEAM = 'team';
-const MATE = 'mate:';
-const JOIN = 'join:';
+const TEAM = 'team:';
+const MEMBER = 'member:';
+export const teamItemId = (team: string): string => `${TEAM}${team}`;
+export const memberItemId = (team: string, role: string): string => `${MEMBER}${team}:${role}`;
 const one = (text: string, max = 120): string => text.replace(/\s+/g, ' ').trim().slice(0, max);
 const time = (iso: string | undefined): number | undefined => {
   const parsed = iso ? Date.parse(iso) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : undefined;
 };
+/** "18:02:11": the exact moment, for tracing; the list shows how long ago. */
+const clock = (iso: string): string => new Date(iso).toLocaleTimeString('en-GB', { hour12: false });
 /** "working 3m" / "idle 20s": the state and how long it has held. */
 const held = (mate: Teammate, now: number): string => {
   if (!mate.online) return 'offline';
@@ -34,29 +43,56 @@ const held = (mate: Teammate, now: number): string => {
 };
 const look = (mate: Teammate): [string, Tone] =>
   !mate.online ? [SYMBOL.idle, 'dim'] : mate.activity?.state === 'working' ? [SYMBOL.active, 'accent'] : [SYMBOL.idle, 'success'];
-const logLine = (entry: LogEntry, now: number): string => `${ago(time(entry.at), now).padEnd(8)} ${entry.from} → ${entry.to} ${entry.kind}: ${one(entry.body, 160)}`;
 
-/** The team, one row per teammate with live activity; the message trace in detail. */
-export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot): PanelSpec {
+/** One timeline line: "18:02:11  reviewer → backend question: Which code?" */
+export function eventLine(event: TeamEvent): string {
+  const at = clock(event.at);
+  const text = event.text ? one(event.text, 400) : '';
+  switch (event.type) {
+    case 'joined': return `${at}  ${event.role} joined${text ? ` · ${text}` : ''}`;
+    case 'left': return `${at}  ${event.role} left`;
+    case 'working': return `${at}  ${event.role} working${text ? ` · ${text}` : ''}`;
+    case 'idle': return `${at}  ${event.role} idle`;
+    case 'message': return `${at}  ${event.role} → ${event.to} ${event.kind}: ${text}`;
+    case 'refused': return `${at}  ${event.role} → ${event.to} ${event.kind} refused (${text})`;
+  }
+}
+
+/** Every team with its members under it, the whole timeline in detail, and actions to create, join, message, leave. */
+export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?: string): PanelSpec {
   const cell: { value: TeamSnapshot } = { value: initial };
   const listeners = new Set<() => void>();
   const reload = async (): Promise<void> => {
     cell.value = await ops.load();
     for (const listener of listeners) listener();
   };
-  const mate = (item: PanelItem | undefined): Teammate | undefined =>
-    item?.id.startsWith(MATE) ? cell.value.mates.find(entry => entry.role === item.id.slice(MATE.length)) : undefined;
-  const team = (item: PanelItem | undefined): string | undefined => item?.id.startsWith(JOIN) ? item.id.slice(JOIN.length) : undefined;
+  const teamOf = (item: PanelItem | undefined): TeamOverview | undefined => {
+    const name = item?.id.startsWith(TEAM) ? item.id.slice(TEAM.length)
+      : item?.id.startsWith(MEMBER) ? item.id.slice(MEMBER.length).split(':')[0] : undefined;
+    return cell.value.teams.find(entry => entry.team === name);
+  };
+  const mateOf = (item: PanelItem | undefined): Teammate | undefined => {
+    if (!item?.id.startsWith(MEMBER)) return undefined;
+    const [, role] = item.id.slice(MEMBER.length).split(':');
+    return teamOf(item)?.mates.find(entry => entry.role === role);
+  };
+  const inTeam = (team: string | undefined): boolean => !!team && cell.value.joined?.team === team;
 
   const actions: PanelAction[] = [
+    { key: 'n', label: 'New team', run: (_item, panel) => { panel.close(); ops.request({ action: 'create' }); } },
     {
-      key: 'm', label: item => `Message ${mate(item)?.role ?? ''}`.trim(),
-      when: item => { const found = mate(item); return !!found && found.online && !found.self; },
-      run: (item, panel) => { panel.close(); ops.compose(`/team send ${mate(item)!.role} `); },
+      key: 'a', label: item => `Join ${teamOf(item)?.team ?? ''}`.trim(),
+      when: item => !!teamOf(item) && !inTeam(teamOf(item)?.team),
+      run: (item, panel) => { panel.close(); ops.request({ action: 'join', team: teamOf(item)!.team }); },
+    },
+    {
+      key: 'm', label: item => `Message ${mateOf(item)?.role ?? ''}`.trim(),
+      when: item => { const mate = mateOf(item); return !!mate && mate.online && !mate.self && inTeam(teamOf(item)?.team); },
+      run: (item, panel) => { panel.close(); ops.request({ action: 'message', team: teamOf(item)!.team, role: mateOf(item)!.role }); },
     },
     {
       key: 'l', label: 'Leave team', confirm: true,
-      when: () => !!cell.value.joined,
+      when: item => inTeam(teamOf(item)?.team),
       run: async (_item, panel) => { const text = await ops.leave(); await reload(); panel.notice(text, 'success'); },
     },
   ];
@@ -64,78 +100,72 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot): PanelSp
   return {
     title: 'Team',
     summary: () => {
-      const { joined, mates } = cell.value;
-      if (!joined) return `not in a team · ${cell.value.teams.length} team${cell.value.teams.length === 1 ? '' : 's'}`;
-      const online = mates.filter(entry => entry.online);
-      const working = online.filter(entry => entry.activity?.state === 'working').length;
-      return `${joined.team} · you are ${joined.role} · ${online.length} online · ${working} working`;
+      const { joined, teams } = cell.value;
+      const count = `${teams.length} team${teams.length === 1 ? '' : 's'}`;
+      return joined ? `you are ${joined.role} in ${joined.team} · ${count}` : `not in a team · ${count}`;
     },
     items: () => {
-      const { joined, mates, teams } = cell.value;
       const now = ops.now();
-      if (!joined) {
-        return teams.map((entry): PanelItem => ({
-          id: `${JOIN}${entry.team}`, label: entry.team, symbol: entry.online ? SYMBOL.active : SYMBOL.idle,
-          tone: entry.online ? 'success' : 'dim', meta: `${entry.online}/${entry.total} online`,
-        }));
-      }
-      return [
-        { id: TEAM, label: joined.team, symbol: SYMBOL.mode, tone: 'accent', meta: `${cell.value.log.length} messages` },
-        ...mates.map((entry): PanelItem => {
-          const [symbol, tone] = look(entry);
-          return { id: `${MATE}${entry.role}`, label: `${entry.role}${entry.self ? ' (you)' : ''}`, symbol, tone, meta: held(entry, now), search: entry.activity?.focus ?? '' };
-        }),
-      ];
+      return cell.value.teams.flatMap(entry => {
+        const online = entry.mates.filter(mate => mate.online).length;
+        const working = entry.mates.filter(mate => mate.online && mate.activity?.state === 'working').length;
+        const head: PanelItem = {
+          id: teamItemId(entry.team), label: entry.team, symbol: inTeam(entry.team) ? SYMBOL.mode : online ? SYMBOL.active : SYMBOL.idle,
+          tone: inTeam(entry.team) ? 'accent' : online ? 'success' : 'dim',
+          meta: `${online}/${entry.mates.length} online${working ? ` · ${working} working` : ''}${inTeam(entry.team) ? ' · you' : ''}`,
+        };
+        return [head, ...entry.mates.map((mate): PanelItem => {
+          const [symbol, tone] = look(mate);
+          return { id: memberItemId(entry.team, mate.role), label: `  ${mate.role}${mate.self ? ' (you)' : ''}`, symbol, tone, meta: held(mate, now), search: `${entry.team} ${mate.activity?.focus ?? ''}` };
+        })];
+      });
     },
     detail: item => {
       const now = ops.now();
-      const found = mate(item);
-      if (found) {
-        const talk = [...cell.value.log].reverse().filter(entry => entry.from === found.role || entry.to === found.role);
+      const team = teamOf(item);
+      const mate = mateOf(item);
+      if (team && mate) {
+        const trace = team.events.filter(event => event.role === mate.role || event.to === mate.role).reverse();
         return {
-          title: `${found.role}${found.self ? ' (you)' : ''}`,
-          subtitle: held(found, now), subtitleTone: look(found)[1],
+          title: `${mate.role}${mate.self ? ' (you)' : ''}`,
+          subtitle: `${held(mate, now)} · team ${team.team}`, subtitleTone: look(mate)[1],
           fields: [
-            { label: 'on', value: found.activity?.focus ? one(found.activity.focus, 400) : '—' },
-            { label: 'cwd', value: found.cwd },
+            { label: 'on', value: mate.activity?.focus ? one(mate.activity.focus, 400) : '—' },
+            { label: 'since', value: mate.activity ? clock(mate.activity.since) : '—' },
+            { label: 'cwd', value: mate.cwd },
           ],
-          sections: [{ title: `Messages (${talk.length})`, lines: talk.map(entry => logLine(entry, now)) }],
+          sections: [{ title: `Timeline (${trace.length})`, lines: trace.map(eventLine) }],
         };
       }
-      const joining = team(item);
-      if (joining) {
-        const entry = cell.value.teams.find(candidate => candidate.team === joining);
-        return {
-          title: joining,
-          subtitle: `${entry?.online ?? 0} of ${entry?.total ?? 0} online`,
-          fields: [{ label: 'join', value: `Enter, then type your role: /team join ${joining} <role>` }],
-        };
-      }
-      const { joined, mates } = cell.value;
+      if (!team) return { title: 'Team' };
+      const member = inTeam(team.team);
       return {
-        title: joined?.team ?? 'team',
-        subtitle: 'Messages are delivered now or refused now. Nothing queues.',
+        title: team.team,
+        subtitle: member ? `You are ${cell.value.joined!.role}. Messages are delivered now or refused now; nothing queues.` : 'You are not in this team. Press a or Enter to join.',
+        subtitleTone: member ? 'accent' : 'muted',
         fields: [
-          { label: 'you', value: joined?.role ?? '—' },
-          { label: 'online', value: mates.filter(entry => entry.online).map(entry => entry.role).join(', ') || '—' },
-          { label: 'offline', value: mates.filter(entry => !entry.online).map(entry => entry.role).join(', ') || '—' },
+          { label: 'online', value: team.mates.filter(entry => entry.online).map(entry => entry.role).join(', ') || '—' },
+          { label: 'offline', value: team.mates.filter(entry => !entry.online).map(entry => entry.role).join(', ') || '—' },
         ],
-        sections: [{ title: 'Recent messages', lines: [...cell.value.log].reverse().map(entry => logLine(entry, now)) }],
+        sections: [
+          { title: 'Members', lines: team.mates.map(entry => `${look(entry)[0]} ${entry.role.padEnd(16)} ${held(entry, now).padEnd(14)} ${entry.activity?.focus ? one(entry.activity.focus, 80) : ''}`) },
+          { title: `Timeline (${team.events.length})`, lines: [...team.events].reverse().map(eventLine) },
+        ],
       };
     },
     actions,
     activate: {
       label: 'Join',
-      when: item => !!team(item),
-      run: (item, panel) => { panel.close(); ops.compose(`/team join ${team(item)!} `); },
+      when: item => !!item?.id.startsWith(TEAM) && !inTeam(teamOf(item)?.team),
+      run: (item, panel) => { panel.close(); ops.request({ action: 'join', team: teamOf(item)!.team }); },
     },
-    empty: 'No teams yet. Type /team join <team> <role> to create one.',
+    empty: 'No teams yet. Press n to create one.',
     subscribe: listener => {
       listeners.add(listener);
       const timer = setInterval(() => { void reload().catch(() => undefined); }, 1000);
       timer.unref?.();
       return () => { listeners.delete(listener); clearInterval(timer); };
     },
-    ...(initial.joined ? { initial: TEAM } : {}),
+    ...(select ? { initial: select } : initial.joined ? { initial: teamItemId(initial.joined.team) } : {}),
   };
 }

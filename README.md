@@ -34,7 +34,7 @@ In another (any folder, repo or worktree: the team is the name, not the path):
 | Command | Meaning |
 | --- | --- |
 | `/team join <team> <role>` | Join `team` as `role`; creates the team if it does not exist. Leaves any team joined before. |
-| `/team` or `/team status` | Opens the team panel: one row per teammate (● working 3m, ○ idle, offline), with what each is on, its cwd and the messages with it. `m` messages the selected teammate, `l` leaves. Outside a team it lists the teams, and Enter prepares a join. |
+| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` messages the selected teammate, `l` leaves. |
 | `/team send <role> <message>` | Send your own message to a teammate now. |
 | `/team leave` | Leave the team. |
 | `/team help` | Usage. |
@@ -56,7 +56,7 @@ Earlier versions had requests that waited for a correlated result, with a queue 
 
 - **Delivered now or refused now.** If the teammate is online, the message arrives within a second. If it is working, the message is steered into the running turn. If it is idle, the message opens a turn. If it is offline, the send fails straight away, and nothing is kept for later.
 - **No request/result.** A question may get an answer later, as another message. Nothing tracks it or blocks on it.
-- **Visible activity.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). `/team` shows it, so a stalled terminal is obvious.
+- **Visible activity and full traceability.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). Every team keeps a timeline with exact times: joins and leaves, who started working on what, who went idle, every message (from → to, kind, text) and every send refused because the recipient was offline. The `/team` panel shows all of it, so a stalled terminal is obvious.
 - **No ping-pong.** After 6 turns opened by teammates without you typing, messages still show up but stop opening turns, until you type something.
 
 ## Lifecycle
