@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Type } from 'typebox';
 import { Value } from 'typebox/value';
@@ -30,13 +31,17 @@ export type Teammate = {
   readonly online: boolean;
   readonly cwd: string;
   readonly self: boolean;
+  /** The role that created the team: it may remove members and delete the team. */
+  readonly admin: boolean;
   readonly activity?: Activity;
 };
+/** Why this terminal is no longer in its team. */
+export type Fate = { readonly reason: 'deleted' } | { readonly reason: 'removed'; readonly by: string } | { readonly reason: 'replaced' };
 /**
  * One thing that happened in a team, for the timeline: who joined or left,
  * who started or stopped working and on what, every message, every refused send.
  */
-export const EVENT_TYPES = ['joined', 'left', 'working', 'idle', 'message', 'refused'] as const;
+export const EVENT_TYPES = ['joined', 'left', 'working', 'idle', 'message', 'refused', 'removed'] as const;
 export type TeamEvent = {
   readonly at: string;
   readonly type: (typeof EVENT_TYPES)[number];
@@ -83,7 +88,60 @@ export class TeamSession {
 
   current(): Joined | undefined { return this.state.get(); }
 
-  async teams(): Promise<string[]> { return this.runtime.teams.list().catch(() => []); }
+  /** Teams on disk; a half-deleted directory is not a team. */
+  async teams(): Promise<string[]> {
+    const names = await this.runtime.teams.list().catch(() => [] as string[]);
+    const present = await Promise.all(names.map(async name => (await this.exists(name)) ? name : undefined));
+    return present.filter((name): name is string => name !== undefined);
+  }
+
+  private async exists(team: string): Promise<boolean> {
+    return this.runtime.teams.read(team).then(record => !!record, () => false);
+  }
+
+  /** The admin is the role that created the team: the member who joined first. */
+  async adminOf(team: string): Promise<string | undefined> {
+    const members = await this.runtime.teams.listMembers(team).catch(() => []);
+    return [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0]?.alias;
+  }
+
+  private async requireAdmin(): Promise<Joined> {
+    const joined = this.state.get();
+    if (!joined) throw new Error('Not in a team.');
+    const admin = await this.adminOf(joined.team);
+    if (admin !== joined.role) throw new Error(`Only the admin of ${joined.team} (${admin ?? 'nobody'}) can do that.`);
+    return joined;
+  }
+
+  /** Admin only: takes `role` out of the team. Its terminal notices within seconds. */
+  async removeMember(role: string): Promise<void> {
+    const joined = await this.requireAdmin();
+    if (role === joined.role) throw new Error('You cannot remove yourself; leave or delete the team instead.');
+    const members = await this.runtime.teams.listMembers(joined.team);
+    const target = members.find(member => member.alias === role && member.state === 'active');
+    if (!target) throw new Error(`${role} is not an active member of ${joined.team}.`);
+    // Recorded first: the removed terminal reads the timeline to learn why it lost its role.
+    await this.record(joined.team, { type: 'removed', role: joined.role, to: role });
+    const timestamp = new Date(this.now()).toISOString();
+    await this.runtime.teams.updateMember(joined.team, target.memberId, target.generation, current => ({ ...current, state: 'left', leftAt: timestamp, updatedAt: timestamp }));
+  }
+
+  /** Admin only: deletes the team, its members, messages and timeline. Every terminal in it notices within seconds. */
+  async deleteTeam(): Promise<string> {
+    const joined = await this.requireAdmin();
+    this.state.set(() => undefined);
+    await withStorageLock(this.runtime.paths.teamLock(joined.team), () => rm(this.runtime.paths.team(joined.team), { recursive: true, force: true }));
+    return joined.team;
+  }
+
+  /** After losing membership: was the team deleted, was this role removed, or did another terminal take it? */
+  async fate(team: string, role: string): Promise<Fate> {
+    if (!await this.exists(team)) return { reason: 'deleted' };
+    const removal = (await this.events(team)).reverse().find(event => event.type === 'removed' && event.to === role);
+    const rejoined = (await this.events(team)).reverse().find(event => event.type === 'joined' && event.role === role);
+    if (removal && (!rejoined || removal.at >= rejoined.at)) return { reason: 'removed', by: removal.role };
+    return { reason: 'replaced' };
+  }
 
   /** Joins `team` as `role`, creating the team on first use. Leaves any team joined before. */
   async join(input: { readonly team: string; readonly role: string; readonly sessionId: string; readonly cwd: string }): Promise<{ readonly created: boolean }> {
@@ -116,13 +174,14 @@ export class TeamSession {
     return joined;
   }
 
-  /** Renews presence. False when another terminal took this role: this one is no longer a member. */
-  async heartbeat(): Promise<boolean> {
+  /** Renews presence. When this terminal is no longer a member, returns the team and role it lost. */
+  async heartbeat(): Promise<{ readonly team: string; readonly role: string } | undefined> {
     const joined = this.state.get();
-    if (!joined) return false;
+    if (!joined) return undefined;
     const alive = await this.runtime.memberships.heartbeat(joined.membership).then(() => true, () => false);
-    if (!alive) this.state.set(current => current === joined ? undefined : current);
-    return alive;
+    if (alive) return undefined;
+    this.state.set(current => current === joined ? undefined : current);
+    return { team: joined.team, role: joined.role };
   }
 
   private activityPath(team: string, memberId: string): string {
@@ -131,7 +190,8 @@ export class TeamSession {
 
   async setActivity(activity: Activity): Promise<void> {
     const joined = this.state.get();
-    if (!joined) return;
+    // A deleted team must not be brought back as a half directory.
+    if (!joined || !await this.exists(joined.team)) return;
     const directory = join(this.runtime.paths.team(joined.team), 'activity');
     await ensurePrivateDirectory(directory);
     const record = { ...activity, ...(activity.focus ? { focus: clean(activity.focus, 512) } : {}) };
@@ -150,6 +210,7 @@ export class TeamSession {
     if (!team) return [];
     const self = this.state.get();
     const members = await this.runtime.teams.listMembers(team);
+    const admin = [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0]?.alias;
     const latest = [...members]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .filter((member, index, all) => all.findIndex(other => other.alias === member.alias) === index);
@@ -158,7 +219,7 @@ export class TeamSession {
       const activity = online
         ? await readJson(this.activityPath(team, member.memberId), assertActivity, 2048).catch(() => undefined)
         : undefined;
-      return { role: member.alias, online, cwd: member.cwd, self: self?.team === team && self.membership.memberId === member.memberId, ...(activity ? { activity } : {}) };
+      return { role: member.alias, online, cwd: member.cwd, self: self?.team === team && self.membership.memberId === member.memberId, admin: member.alias === admin, ...(activity ? { activity } : {}) };
     }));
     return list.sort((a, b) => Number(b.online) - Number(a.online) || a.role.localeCompare(b.role));
   }
@@ -186,6 +247,7 @@ export class TeamSession {
   private async record(team: string, event: Omit<TeamEvent, 'at'>): Promise<void> {
     const entry: TeamEvent = { ...event, at: new Date(this.now()).toISOString(), ...(event.text ? { text: clean(event.text, 1200) } : {}) };
     await withStorageLock(this.runtime.paths.lock(`events-${team}`), async () => {
+      if (!await this.exists(team)) return;
       const events = await this.events(team);
       await replaceAtomicJson(this.eventsPath(team), [...events, entry].slice(-EVENTS_KEEP), { maxBytes: EVENTS_BYTES });
     }).catch(() => {});

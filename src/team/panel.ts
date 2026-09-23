@@ -14,13 +14,15 @@ export type TeamSnapshot = {
 export type TeamIntent =
   | { readonly action: 'create' }
   | { readonly action: 'join'; readonly team: string }
-  | { readonly action: 'message'; readonly team: string; readonly role: string };
+  | { readonly action: 'message'; readonly team: string; readonly role: string }
+  | { readonly action: 'leave'; readonly team: string }
+  | { readonly action: 'delete'; readonly team: string }
+  | { readonly action: 'remove'; readonly team: string; readonly role: string };
 
 export type TeamPanelOps = Readonly<{
   load(): Promise<TeamSnapshot>;
   /** Close the panel and handle what needs input. */
   request(intent: TeamIntent): void;
-  leave(): Promise<string>;
   now(): number;
 }>;
 
@@ -49,12 +51,14 @@ export function eventLine(event: TeamEvent): string {
   const at = clock(event.at);
   const text = event.text ? one(event.text, 400) : '';
   switch (event.type) {
+    default: return `${at}  ${event.role} ${event.type}`;
     case 'joined': return `${at}  ${event.role} joined${text ? ` · ${text}` : ''}`;
     case 'left': return `${at}  ${event.role} left`;
     case 'working': return `${at}  ${event.role} working${text ? ` · ${text}` : ''}`;
     case 'idle': return `${at}  ${event.role} idle`;
     case 'message': return `${at}  ${event.role} → ${event.to} ${event.kind}: ${text}`;
     case 'refused': return `${at}  ${event.role} → ${event.to} ${event.kind} refused (${text})`;
+    case 'removed': return `${at}  ${event.role} removed ${event.to}`;
   }
 }
 
@@ -77,6 +81,10 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
     return teamOf(item)?.mates.find(entry => entry.role === role);
   };
   const inTeam = (team: string | undefined): boolean => !!team && cell.value.joined?.team === team;
+  const adminOf = (team: TeamOverview | undefined): string | undefined => team?.mates.find(mate => mate.admin)?.role;
+  /** Only the admin, while in its own team, may remove members or delete it. */
+  const amAdmin = (team: string | undefined): boolean =>
+    inTeam(team) && adminOf(cell.value.teams.find(entry => entry.team === team)) === cell.value.joined?.role;
   /** Why the selected member cannot be messaged right now, or undefined when it can. */
   const whyNot = (item: PanelItem | undefined): string | undefined => {
     const mate = mateOf(item);
@@ -106,9 +114,21 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
       },
     },
     {
-      key: 'l', label: 'Leave team', confirm: true,
+      key: 'x', label: item => `Remove ${mateOf(item)?.role ?? ''}`.trim(),
+      when: item => { const mate = mateOf(item); return !!mate && !mate.self && amAdmin(teamOf(item)?.team); },
+      run: (item, panel) => {
+        panel.close(); ops.request({ action: 'remove', team: teamOf(item)!.team, role: mateOf(item)!.role });
+      },
+    },
+    {
+      key: 'l', label: 'Leave team',
       when: item => inTeam(teamOf(item)?.team),
-      run: async (_item, panel) => { const text = await ops.leave(); await reload(); panel.notice(text, 'success'); },
+      run: (item, panel) => { panel.close(); ops.request({ action: 'leave', team: teamOf(item)!.team }); },
+    },
+    {
+      key: 'd', label: item => `Delete ${teamOf(item)?.team ?? 'team'}`,
+      when: item => !!item?.id.startsWith(TEAM) && amAdmin(teamOf(item)?.team),
+      run: (item, panel) => { panel.close(); ops.request({ action: 'delete', team: teamOf(item)!.team }); },
     },
   ];
 
@@ -131,7 +151,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
         };
         return [head, ...entry.mates.map((mate): PanelItem => {
           const [symbol, tone] = look(mate);
-          return { id: memberItemId(entry.team, mate.role), label: `  ${mate.role}${mate.self ? ' (you)' : ''}`, symbol, tone, meta: held(mate, now), search: `${entry.team} ${mate.activity?.focus ?? ''}` };
+          return { id: memberItemId(entry.team, mate.role), label: `  ${mate.role}${mate.admin ? ' · admin' : ''}${mate.self ? ' (you)' : ''}`, symbol, tone, meta: held(mate, now), search: `${entry.team} ${mate.activity?.focus ?? ''}` };
         })];
       });
     },
@@ -142,7 +162,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
       if (team && mate) {
         const trace = team.events.filter(event => event.role === mate.role || event.to === mate.role).reverse();
         return {
-          title: `${mate.role}${mate.self ? ' (you)' : ''}`,
+          title: `${mate.role}${mate.admin ? ' · admin' : ''}${mate.self ? ' (you)' : ''}`,
           subtitle: `${held(mate, now)} · team ${team.team} · ${whyNot(item) ?? 'Enter or m to message'}`, subtitleTone: look(mate)[1],
           fields: [
             { label: 'on', value: mate.activity?.focus ? one(mate.activity.focus, 400) : '—' },
@@ -159,6 +179,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
         subtitle: member ? `You are ${cell.value.joined!.role}. Messages are delivered now or refused now; nothing queues.` : 'You are not in this team. Press a or Enter to join.',
         subtitleTone: member ? 'accent' : 'muted',
         fields: [
+          { label: 'admin', value: adminOf(team) ?? '—' },
           { label: 'online', value: team.mates.filter(entry => entry.online).map(entry => entry.role).join(', ') || '—' },
           { label: 'offline', value: team.mates.filter(entry => !entry.online).map(entry => entry.role).join(', ') || '—' },
         ],

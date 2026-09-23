@@ -26,6 +26,10 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 
 `TeamSession.record` appends to `teams/<team>/events.json` (the last 300 events, under a storage lock): `joined` (with cwd), `left`, `working` (with focus, only when state or focus changes), `idle`, `message` (full text), and `refused` (offline or unknown recipient). Tracing is best-effort and never blocks the work it traces.
 
+## Admin, removal and deletion
+
+The admin of a team is the member with the earliest `joinedAt` (the creator; rejoining keeps `joinedAt`). `removeMember` records a `removed` event first and then marks the member `left`, which fences its presence. `deleteTeam` removes `teams/<team>/` under the team lock. `setActivity` and `record` check that the team still exists, so a late write cannot bring back a half directory. On a failed heartbeat (every 5 s), `fate` tells the terminal whether the team was deleted, the role was removed (and by whom), or another terminal took it. Removed and deleted are remembered in the session, so a reload does not rejoin.
+
 ## Transport
 
 `src/runtime` and `src/storage` provide the durable transport: team and member records, presence leases, per-member inboxes, delivery leases and receipts, with strict schemas, byte bounds, private permissions, symlink checks, locks and atomic writes. Members join as `external`. Rejoining a role keeps its member ID and bumps its generation. A live role cannot be taken by a second terminal. The request/reply and resource-lease services remain in the transport, but the extension does not use them.

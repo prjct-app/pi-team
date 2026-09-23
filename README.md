@@ -34,9 +34,11 @@ In another (any folder, repo or worktree: the team is the name, not the path):
 | Command | Meaning |
 | --- | --- |
 | `/team join <team> <role>` | Join `team` as `role`; creates the team if it does not exist. Leaves any team joined before. |
-| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. |
+| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. As admin, `x` removes the selected member and `d` deletes the team. Every one of these asks for confirmation. |
 | `/team send <role> <message>` | Send your own message to a teammate now. |
-| `/team leave` | Leave the team. |
+| `/team leave` | Leave the team, after a confirmation. |
+| `/team remove <role>` | Admin only: take a member out of the team, after a confirmation. |
+| `/team delete` | Admin only: delete the team for everyone, after a confirmation. |
 | `/team help` | Usage. |
 
 Team and role names are 1–48 lowercase letters, digits or hyphens, starting with a letter. A role that is already online in another terminal is refused. Completion suggests existing teams after `join` and online roles after `send`.
@@ -58,6 +60,10 @@ Earlier versions had requests that waited for a correlated result, with a queue 
 - **No request/result.** A question may get an answer later, as another message. Nothing tracks it or blocks on it.
 - **Visible activity and full traceability.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). Every team keeps a timeline with exact times: joins and leaves, who started working on what, who went idle, every message (from → to, kind, text) and every send refused because the recipient was offline. The `/team` panel shows all of it, so a stalled terminal is obvious.
 - **No ping-pong.** After 6 turns opened by teammates without you typing, messages still show up but stop opening turns, until you type something.
+
+## Admin
+
+The role that creates a team is its admin, marked `· admin` in the panel. While you are in the team as that role, you can remove members and delete the team. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
 
 ## Lifecycle
 

@@ -2,11 +2,13 @@ import type { AutocompleteItem } from '@earendil-works/pi-tui';
 import { completer, type CommandOption } from '@prjct.app/pi-tui-kit';
 import { TEAM_ID_PATTERN } from '../domain/team.ts';
 
-export const TEAM_HELP = '/team join <team> <role> | send <role> <message> | leave | status | help';
+export const TEAM_HELP = '/team join <team> <role> | send <role> <message> | leave | remove <role> | delete | status | help';
 export type TeamCommand =
   | { readonly action: 'status' }
   | { readonly action: 'leave' }
   | { readonly action: 'help' }
+  | { readonly action: 'delete' }
+  | { readonly action: 'remove'; readonly role: string }
   | { readonly action: 'join'; readonly team: string; readonly role: string }
   | { readonly action: 'send'; readonly to: string; readonly body: string };
 
@@ -20,7 +22,11 @@ export function parseTeamCommand(input: string): TeamCommand {
   if (!text) return { action: 'status' };
   const [first, ...args] = text.split(/\s+/);
   const action = first!.toLowerCase();
-  if (action === 'status' || action === 'leave' || action === 'help') {
+  if (action === 'remove') {
+    if (args.length !== 1) throw new Error('Usage: /team remove <role>');
+    return { action, role: name(args[0], 'Role') };
+  }
+  if (action === 'status' || action === 'leave' || action === 'help' || action === 'delete') {
     if (args.length) throw new Error(TEAM_HELP);
     return { action };
   }
@@ -45,7 +51,9 @@ export function commandCompletions(known: { readonly teams: () => readonly strin
     { value: 'join', description: 'join a team under a role (creates the team)', options: teams },
     { value: 'send', description: 'message a teammate now; never queued', options: roles },
     { value: 'status', description: 'who is online and what each is doing' },
-    { value: 'leave', description: 'leave the team' },
+    { value: 'leave', description: 'leave the team (asks first)' },
+    { value: 'remove', description: 'admin: take a member out of the team', options: roles },
+    { value: 'delete', description: 'admin: delete the team you created' },
     { value: 'help', description: 'what /team accepts' },
   ]);
 }
