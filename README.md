@@ -1,49 +1,73 @@
 # pi-team
 
-Explicit project Teams with durable Runs, reusable Experts, and supervised local execution. Normal prompts are not intercepted.
+Connect independent Pi terminals into a named team so they can talk to each other.
+
+You open the terminals and give each a role. Each one keeps its own session, model, cwd and tools, and does its own work, with its own subagents. `pi-team` only lets them see each other and exchange messages. Nothing is queued and nobody waits: a message is delivered now or refused now.
 
 ## Install
 
-Requires Pi **0.85.1**, Node.js **22.19+**, authenticated model access, and `tmux` for Expert execution.
+Requires Pi **0.85.1** and Node.js **22.19+**.
 
 ```sh
 pi install npm:@prjct.app/pi-team
 ```
 
-Restart Pi, then explicitly start an objective:
+## Quickstart
+
+In one terminal:
 
 ```text
-/team Ship login validation
+/team join shop backend
 ```
 
-This lazily creates a project Team and queues a Run. Main Pi orchestrates through the active-only `team_orchestrate` tool. Dispatch reports whether an Expert was created or reused. Busy Experts queue; distinct Experts can execute concurrently, up to three. An Expert's identity, session file, instructions, bounded memory, and assignment history survive process shutdown and later Runs.
+In another (any folder, repo or worktree: the team is the name, not the path):
+
+```text
+/team join shop reviewer
+/team send backend Please check the login error codes
+```
+
+`join` creates the team the first time. The status line shows `team shop · reviewer`.
 
 ## Commands
 
-- `/team <objective>` — start or queue an objective (one active Run).
-- `/team` or `/team status` — bounded plain Team/Run/Expert/Assignment overview.
-- `/team history` — recent Run history.
-- `/team doctor` — bounded diagnostics without process or ownership tokens.
-- `/team cancel [run-id]` — cancel an owned active or queued Run.
-- `/team help` — usage.
+| Command | Meaning |
+| --- | --- |
+| `/team join <team> <role>` | Join `team` as `role`; creates the team if it does not exist. Leaves any team joined before. |
+| `/team` or `/team status` | Opens the team panel: one row per teammate (● working 3m, ○ idle, offline), with what each is on, its cwd and the messages with it. `m` messages the selected teammate, `l` leaves. Outside a team it lists the teams, and Enter prepares a join. |
+| `/team send <role> <message>` | Send your own message to a teammate now. |
+| `/team leave` | Leave the team. |
+| `/team help` | Usage. |
 
-The old create/join/start/migrate/legacy lifecycle commands are unsupported. No project YAML or Markdown configuration is loaded by this extension. Startup does not detect or migrate old stores.
+Team and role names are 1–48 lowercase letters, digits or hyphens, starting with a letter. A role that is already online in another terminal is refused. Completion suggests existing teams after `join` and online roles after `send`.
 
-## Orchestration tool
+## Agent tools
 
-During an active Run, `team_orchestrate` supports `dispatch`, `status`, `cancel_assignment`, `cancel_run`, and `finish`. Dispatch requires role, capabilities, task, and an explicit built-in tool allowlist; instructions are optional. It returns Expert ID, stable session reference, Assignment ID, and `created`/`reused`. Status includes bounded recent evidence. Finish is blocked while assignments remain outstanding. Expert reports are untrusted evidence, never user authorization.
+While joined, the agent gets two tools and one short line in its system prompt that says who it is:
 
-Only an explicit objective starts orchestration. Completing a Run allows the next queued objective to start in the owning session. Shutdown, reload, new, resume, and fork terminally interrupt active work, fence ownership, and preserve queued objectives without automatic replay. A later explicit objective can claim an unowned Team and process its queue.
+- `team_peers` lists the other terminals with their live activity.
+- `team_message { to, kind: info | question | handoff, body }` sends a message.
+
+The tool descriptions tell the agent never to wait on a teammate, to keep working and to use its own tools and subagents for anything it needs. When you leave, both tools and the line go away.
+
+## Why nothing queues
+
+Earlier versions had requests that waited for a correlated result, with a queue per member. Agents ended up waiting on each other in chains, nothing advanced, and you could not see where it was stuck. So now:
+
+- **Delivered now or refused now.** If the teammate is online, the message arrives within a second. If it is working, the message is steered into the running turn. If it is idle, the message opens a turn. If it is offline, the send fails straight away, and nothing is kept for later.
+- **No request/result.** A question may get an answer later, as another message. Nothing tracks it or blocks on it.
+- **Visible activity.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). `/team` shows it, so a stalled terminal is obvious.
+- **No ping-pong.** After 6 turns opened by teammates without you typing, messages still show up but stop opening turns, until you type something.
+
+## Lifecycle
+
+Membership is saved in the session. After `/reload` or a resume, the terminal takes its role back. On shutdown the role is released immediately, so another terminal can take it. `/new` and `/fork` start outside any team, and an explicit `/team leave` is remembered.
 
 ## Storage and safety
 
-State is isolated under `${PRJCT_HOME:-~/.prjct}/pi-team/orchestration-v2/`. Project identity uses the canonical Git root (or cwd outside Git); moving a project changes its identity. Existing old stores are not modified.
+State lives under `${PRJCT_HOME:-~/.prjct}/pi-team/teams/<team>/`, with private permissions, strict schemas, byte limits, locks and atomic writes. Messages are at most 4 KB. A message that nobody picks up within 10 minutes (for example, because the recipient crashed) is dropped and never replayed.
 
-Records use strict schemas, byte bounds, private permissions, symlink checks, locks, and atomic writes. Limits: 64 Runs, 128 Assignments, 16 Experts, 32 assignment references per Expert, and three concurrent/unresolved workers. Terminal history is pruned within these bounds. Full Pi sessions are durable and are not bounded metadata.
-
-Production execution uses authenticated supervisor control, durable requests/replies, receipts, and leases. A dispatch or process launch is not success: completion requires a correlated reply and a proven worker stop. Unprovable shutdown blocks the Expert rather than guessing ownership. Use doctor and manually verify process identity before recovery; no automatic adoption or retry is provided.
-
-This is not an OS sandbox: tools, especially Bash, run with the current user's permissions. Do not send secrets. Metadata redaction is best-effort, not a secret detector. Model requests use the worker's configured authenticated provider. A live model/tmux/PTY roundtrip remains a manual verification requirement; deterministic tests cover the adapter boundary with fake supervision and real durable transport.
+This is not a sandbox. Every terminal runs as your OS user. Teammate messages are marked as teammate data, not user instructions, and credentials in them are redacted on a best-effort basis. Message text goes to the recipient's model provider like any prompt, so do not send secrets. Local disk only: no network filesystems and no messaging across machines.
 
 ## Development
 

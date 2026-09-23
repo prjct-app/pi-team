@@ -1,7 +1,7 @@
 {
   "name": "@prjct.app/pi-team",
   "version": "0.7.0",
-  "description": "Coordinate explicit local Pi teams with durable messaging and safely supervised peers.",
+  "description": "Connect independent Pi terminals into a named team: live presence and activity, and messages that never queue.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -14,7 +14,6 @@
     "multi-agent",
     "agent-collaboration",
     "messaging",
-    "task-queue",
     "local-first"
   ],
   "pi": {

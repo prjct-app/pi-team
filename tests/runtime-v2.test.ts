@@ -10,7 +10,6 @@ import { PresenceService } from '../src/runtime/presence.ts';
 import { TeamReconciler } from '../src/runtime/reconciler.ts';
 import { RequestService } from '../src/runtime/requests.ts';
 import { ResourceLeaseService } from '../src/runtime/resources.ts';
-import { registerTeamTool, TEAM_TOOL_NAME, type TeamToolRuntime } from '../src/runtime/team-tool.ts';
 import { InboxStore } from '../src/storage/inbox-store.ts';
 import { LeaseStore } from '../src/storage/lease-store.ts';
 import { TeamPaths } from '../src/storage/paths.ts';
@@ -296,48 +295,4 @@ test('resource claims are advisory, token-fenced, and handed off only after rele
   assert.equal(second.generation, first.generation + 1);
   await assert.rejects(runtime.resources.release(pm, '/repo/src/api.ts', first.token, first.generation), (error: unknown) =>
     (error as { code?: string }).code === 'FENCED');
-});
-
-test('the compact team tool is active only with membership and exposes no destructive actions', async (t) => {
-  const fixture = await setup(t);
-  const membership = await fixture.join('pm');
-  let current: TeamToolRuntime | undefined;
-  let active = ['read'];
-  let definition: { execute: (...args: any[]) => Promise<any>; parameters: unknown } | undefined;
-  const host = {
-    registerTool(tool: any) { definition = tool; },
-    getActiveTools() { return active; },
-    setActiveTools(names: string[]) { active = names; },
-  };
-  const controller = registerTeamTool(host, () => current);
-  controller.sync();
-  assert.deepEqual(active, ['read']);
-  current = {
-    membership,
-    memberships: fixture.memberships,
-    delivery: fixture.delivery,
-    requests: fixture.requests,
-    resources: fixture.resources,
-  };
-  controller.sync();
-  assert.deepEqual(active, ['read', TEAM_TOOL_NAME]);
-  const status = await definition!.execute('call-1', { action: 'status' }, undefined, undefined, {});
-  assert.match(status.content[0].text, /"teamId":"shop"/);
-  const backend = await fixture.join('backend');
-  const aborted = new AbortController();
-  aborted.abort(new Error('cancelled tool call'));
-  await assert.rejects(definition!.execute(
-    'call-2',
-    { action: 'send', to: 'backend', kind: 'info', body: 'Must not publish.' },
-    aborted.signal,
-    undefined,
-    {},
-  ), /cancelled tool call/);
-  assert.equal((await fixture.delivery.inboxItems(backend)).items.length, 0);
-  for (const forbidden of ['create', 'start', 'stop', 'kill', 'close', 'migrate', 'purge']) {
-    assert.doesNotMatch(JSON.stringify(definition!.parameters), new RegExp(`"${forbidden}"`));
-  }
-  current = undefined;
-  controller.sync();
-  assert.deepEqual(active, ['read']);
 });

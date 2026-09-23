@@ -1,38 +1,33 @@
 # Architecture
 
-## Active integration
+## Integration
 
-`src/index.ts` registers only `/team`. Fresh session startup creates no records, timers, tool, or prompt changes. An explicit objective lazily binds the canonical project, persists a Run, claims a fenced owner, and calls `sendUserMessage` once when that Run becomes active. Normal input is not intercepted. `team_orchestrate` is lazily registered and active only during owned Runs; its prompt suffix is absent outside Runs. Deactivation removes only that tool, preserving unrelated active tools.
+`src/index.ts` registers `/team` and, lazily on the first join, the `team_peers` and `team_message` tools. At startup it creates no records, adds no tools and leaves the prompt unchanged. While the terminal is joined:
 
-`src/dynamic/domain.ts`, `store.ts`, and `service.ts` define strict bounded Team, Run, Expert, and Assignment records. A locked atomic project record enforces one active Run, one active assignment per Expert, unique roles, and a maximum of three busy/blocked Experts. Suitable Experts are reused, busy Experts queue, and capability/tool-policy escalation is rejected. Generation plus owner epoch fences results. Terminal cancellation never becomes success after a late reply.
+- the two tools are active, and they are removed again on leave;
+- `before_agent_start` appends one stable line naming the role and the team, and records the prompt as the terminal's focus;
+- a poll loop (1 s) receives messages, and every 10 s it renews presence.
 
-## Storage
+Membership is persisted with `pi.appendEntry('team-membership', …)`, which is free and never enters model context. It is restored on `session_start`. On `session_shutdown` the role is released, so a reload can take it back right away.
 
-The new namespace is `${PRJCT_HOME:-~/.prjct}/pi-team/orchestration-v2/`:
+## Messaging model
 
-```text
-projects/<project-id>/state.json
-projects/<project-id>/sessions/<stable-session-ref>.jsonl
-transport/teams/<project-id>/...
-transport/control/...
-```
+`src/team/session.ts` (`TeamSession`) holds one terminal's membership and does no queuing of work:
 
-Project IDs hash canonical Git root or cwd. A project move deliberately produces a different identity. Metadata bounds are 64 Runs, 128 Assignments, 16 Experts, and 32 assignment references per Expert; old terminal records may be pruned. Private directories, strict schemas, byte bounds, storage locks, and atomic publication reuse the existing storage primitives. Pi session files retain conversation history separately from bounded Expert memory.
+- `send` resolves the role and **refuses offline recipients**. Messages use kinds `info | question | handoff` and a 10-minute TTL. There is no request/reply correlation.
+- `receive` claims, reads and finishes each pending message exactly once, in creation order.
+- `setActivity` / `teammates` publish and read `teams/<team>/activity/<member>.json` (`working | idle`, since, focus) next to the presence lease, so `/team` and `team_peers` show where each terminal is.
 
-## Production execution
+`index.ts` delivers a received message with `sendMessage`. A busy terminal gets it steered into its running turn. An idle one gets a new turn, up to `AUTO_TURN_LIMIT` (6) consecutive teammate-opened turns. After that, messages are shown without triggering a turn until interactive input resets the counter. Delivered content is one header line plus the body; nothing else is added to context.
 
-`runner.ts` adapts the existing `TeamSupervisor`, `TeamRuntime`, membership leases, durable request/reply spool, and receipts. Transport records live in the isolated namespace; no old Team bytes are reused. The adapter creates a private stable Pi session header once and launches Pi with `--session` referencing the same file across assignments and Runs. It disables ambient extension/skill/template/context-file discovery and passes an explicit tool allowlist.
+## Panel
 
-`worker.ts` is selected only for supervised worker environments. It authenticates using the existing private control socket bootstrap, validates durable Expert identity/session and active assignment generation/owner epoch, loads role instructions and bounded memory, and enforces the allowlist at `tool_call`. Its only extension tool is `team_reply`. Requests are durably claimed/read before `sendUserMessage`; replies are explicitly correlated. Membership and delivery leases renew during work. Neither launch nor a model turn is treated as successful execution. The adapter requires a valid reply receipt and a proven stop before reporting completion.
+`src/team/panel.ts` builds the `/team` panel on the shared pi-tui-kit docked panel. It reloads a snapshot every second: teammates, their activity, and the team's message trace (`teams/<team>/messages.json`, the last 100 messages, written on send). The panel does not hold the command queue.
 
-The existing supervisor revalidates owner identity, PID start identity, process group, and marked tmux metadata before bounded graceful/TERM/KILL escalation. Tokens are never projected into Team UI/history. Unproven stops block capacity and require manual investigation. Worker startup failures and deadlines produce failure, not fabricated results.
+## Transport
 
-## Interruption
+`src/runtime` and `src/storage` provide the durable transport: team and member records, presence leases, per-member inboxes, delivery leases and receipts, with strict schemas, byte bounds, private permissions, symlink checks, locks and atomic writes. Members join as `external`. Rejoining a role keeps its member ID and bumps its generation. A live role cannot be taken by a second terminal. The request/reply and resource-lease services remain in the transport, but the extension does not use them.
 
-Reload, new, resume, fork, and shutdown cancel active assignments and terminally cancel the active Run with an interruption reason. They stop only owned workers, release/fence the owner, retain Team/Experts/sessions/history/queued Runs, and never automatically restore execution. A new explicit objective may claim an unowned/dead-owned Team. Dead-owner recovery interrupts abandoned active work and blocks unresolved Experts rather than adopting or replaying them.
+## Removed
 
-## Views and compatibility
-
-`view.ts` projects bounded plain status/history/doctor summaries without owner/process/control/lease tokens. Free text is control-sanitized and best-effort secret-redacted. No color is required. The previous interactive dashboard remains inactive library code. Legacy inspection/migration and v1 mailbox sources are removed; old command forms are rejected and old stores are untouched.
-
-Only documented Pi 0.85.1 extension APIs and CLI flags are used. Deterministic tests cover scheduling, storage, lifecycle, supervisor safety, and the production adapter with fake supervision plus real durable transport. Live authenticated model/tmux/PTY behavior remains manually unchecked. There is no OS sandbox, exactly-once side-effect guarantee, automatic recovery/adoption, Git/worktree automation, deployment, cross-machine transport, or network-filesystem support.
+The autonomous orchestrator (Runs, Experts, tmux supervision, `team_orchestrate`) was removed. Parallel work inside one terminal belongs to pi-subagents. Its old `orchestration-v2` store is left untouched.

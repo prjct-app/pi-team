@@ -3,7 +3,6 @@ import { LeaseStore } from '../storage/lease-store.ts';
 import { TeamPaths } from '../storage/paths.ts';
 import { ReceiptStore } from '../storage/receipt-store.ts';
 import { TeamStore } from '../storage/team-store.ts';
-import { RuntimeStore } from '../supervisor/runtime-store.ts';
 import { DeliveryService } from './delivery.ts';
 import { MembershipService } from './membership.ts';
 import { PresenceService } from './presence.ts';
@@ -18,7 +17,6 @@ export class TeamRuntime {
   readonly inbox: InboxStore;
   readonly receipts: ReceiptStore;
   readonly leases: LeaseStore;
-  readonly runtimes: RuntimeStore;
   readonly presence: PresenceService;
   readonly memberships: MembershipService;
   readonly delivery: DeliveryService;
@@ -32,7 +30,6 @@ export class TeamRuntime {
     this.inbox = new InboxStore(paths, { now });
     this.receipts = new ReceiptStore(paths, { now });
     this.leases = new LeaseStore(paths, { now });
-    this.runtimes = new RuntimeStore(paths);
     this.presence = new PresenceService(this.teams, this.leases, { now });
     this.memberships = new MembershipService(paths, this.teams, this.presence, now);
     this.delivery = new DeliveryService(this.memberships, this.inbox, this.receipts, this.leases, { now });
