@@ -210,10 +210,15 @@ test('the panel lists every team with its members, and the timeline in detail', 
 
   const control = { close() {}, refresh() {}, notice() {}, select() {} };
   const key = (k: string) => spec.actions!.find(action => action.key === k)!;
-  assert.equal(key('m').when!(items[1]), true);
-  assert.equal(key('m').when!(items[2]), false, 'Not to yourself');
-  assert.equal(key('m').when!(items[3]), false, 'Not to someone offline');
-  assert.equal(key('m').when!(items[5]), false, 'Not into a team you are not in');
+  const notices: string[] = [];
+  const noting = { ...control, notice: (text: string) => { notices.push(text); } };
+  assert.equal(key('m').when!(items[1]), true, 'Always offered on a member row');
+  assert.equal(key('m').when!(items[0]), false, 'Not on a team row');
+  await key('m').run(items[2], noting);
+  await key('m').run(items[3], noting);
+  await key('m').run(items[5], noting);
+  assert.deepEqual(notices, ['That is you.', 'docs is offline; nothing would be delivered.', 'Join infra first to message its members: select infra and press a.']);
+  assert.equal(spec.activate!.when!(items[1]), true, 'Enter on a member messages it');
   assert.equal(key('a').when!(items[0]), false, 'Already in shop');
   assert.equal(key('a').when!(items[4]), true);
   await key('m').run(items[1], control);

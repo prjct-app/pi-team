@@ -34,7 +34,7 @@ In another (any folder, repo or worktree: the team is the name, not the path):
 | Command | Meaning |
 | --- | --- |
 | `/team join <team> <role>` | Join `team` as `role`; creates the team if it does not exist. Leaves any team joined before. |
-| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` messages the selected teammate, `l` leaves. |
+| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. |
 | `/team send <role> <message>` | Send your own message to a teammate now. |
 | `/team leave` | Leave the team. |
 | `/team help` | Usage. |

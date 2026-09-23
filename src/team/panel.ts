@@ -77,6 +77,16 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
     return teamOf(item)?.mates.find(entry => entry.role === role);
   };
   const inTeam = (team: string | undefined): boolean => !!team && cell.value.joined?.team === team;
+  /** Why the selected member cannot be messaged right now, or undefined when it can. */
+  const whyNot = (item: PanelItem | undefined): string | undefined => {
+    const mate = mateOf(item);
+    const team = teamOf(item)?.team;
+    if (!mate || !team) return 'Select a member to message.';
+    if (mate.self) return 'That is you.';
+    if (!inTeam(team)) return `Join ${team} first to message its members: select ${team} and press a.`;
+    if (!mate.online) return `${mate.role} is offline; nothing would be delivered.`;
+    return undefined;
+  };
 
   const actions: PanelAction[] = [
     { key: 'n', label: 'New team', run: (_item, panel) => { panel.close(); ops.request({ action: 'create' }); } },
@@ -86,9 +96,14 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
       run: (item, panel) => { panel.close(); ops.request({ action: 'join', team: teamOf(item)!.team }); },
     },
     {
+      // Shown on every member row, so it is always findable; says why when it cannot send.
       key: 'm', label: item => `Message ${mateOf(item)?.role ?? ''}`.trim(),
-      when: item => { const mate = mateOf(item); return !!mate && mate.online && !mate.self && inTeam(teamOf(item)?.team); },
-      run: (item, panel) => { panel.close(); ops.request({ action: 'message', team: teamOf(item)!.team, role: mateOf(item)!.role }); },
+      when: item => !!mateOf(item),
+      run: (item, panel) => {
+        const blocked = whyNot(item);
+        if (blocked) { panel.notice(blocked, 'warning'); return; }
+        panel.close(); ops.request({ action: 'message', team: teamOf(item)!.team, role: mateOf(item)!.role });
+      },
     },
     {
       key: 'l', label: 'Leave team', confirm: true,
@@ -128,7 +143,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
         const trace = team.events.filter(event => event.role === mate.role || event.to === mate.role).reverse();
         return {
           title: `${mate.role}${mate.self ? ' (you)' : ''}`,
-          subtitle: `${held(mate, now)} · team ${team.team}`, subtitleTone: look(mate)[1],
+          subtitle: `${held(mate, now)} · team ${team.team} · ${whyNot(item) ?? 'Enter or m to message'}`, subtitleTone: look(mate)[1],
           fields: [
             { label: 'on', value: mate.activity?.focus ? one(mate.activity.focus, 400) : '—' },
             { label: 'since', value: mate.activity ? clock(mate.activity.since) : '—' },
@@ -154,10 +169,19 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
       };
     },
     actions,
+    // Enter acts on the row: join a team you are not in, message a member.
     activate: {
-      label: 'Join',
-      when: item => !!item?.id.startsWith(TEAM) && !inTeam(teamOf(item)?.team),
-      run: (item, panel) => { panel.close(); ops.request({ action: 'join', team: teamOf(item)!.team }); },
+      label: item => mateOf(item) ? `Message ${mateOf(item)!.role}` : `Join ${teamOf(item)?.team ?? ''}`.trim(),
+      when: item => !!mateOf(item) || (!!item?.id.startsWith(TEAM) && !inTeam(teamOf(item)?.team)),
+      run: (item, panel) => {
+        if (mateOf(item)) {
+          const blocked = whyNot(item);
+          if (blocked) { panel.notice(blocked, 'warning'); return; }
+          panel.close(); ops.request({ action: 'message', team: teamOf(item)!.team, role: mateOf(item)!.role });
+          return;
+        }
+        panel.close(); ops.request({ action: 'join', team: teamOf(item)!.team });
+      },
     },
     empty: 'No teams yet. Press n to create one.',
     subscribe: listener => {
