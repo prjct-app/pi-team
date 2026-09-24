@@ -30,7 +30,7 @@ export type TeamPanelOps = Readonly<{
 }>;
 
 /** Marks the admin, left of its name. */
-export const CROWN = '♛';
+export const CROWN = '👑';
 const TEAM = 'team:';
 const MEMBER = 'member:';
 export const teamItemId = (teamId: string): string => `${TEAM}${teamId}`;

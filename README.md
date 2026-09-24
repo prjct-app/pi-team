@@ -69,7 +69,7 @@ Everything is stored by ID, never by name. A team is `t-<uuid>`, and its name li
 
 ## Admin
 
-The role that creates a team is its admin, marked with a crown (`♛ backend`) in the panel. While you are in the team as that member, you can rename the team, rename or remove members, and delete the team. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
+The role that creates a team is its admin, marked with a crown (`👑 backend`) in the panel. While you are in the team as that member, you can rename the team, rename or remove members, and delete the team. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
 
 ## Lifecycle
 
