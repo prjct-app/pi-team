@@ -329,8 +329,9 @@ test('the admin removes a member; that terminal is told and leaves', async (t) =
   assert.match(b.last(), /Only the admin of shop \(backend\) can do that/);
   await a.command('remove docs');
   assert.match(a.last(), /Removed docs from shop/);
-  await until(() => c.status.text === undefined);
-  assert.ok(c.notices.some(n => /You were removed from shop by backend/.test(n)));
+  // The status clears first; the reason follows once the timeline is read.
+  await until(() => c.notices.some(n => /You were removed from shop by backend/.test(n)));
+  assert.equal(c.status.text, undefined);
   assert.ok(!c.active.includes('team_message'));
   await a.command('');
   assert.match(a.last(), /○ docs {2}offline/);
@@ -345,8 +346,8 @@ test('the admin deletes its team; every other terminal is told', async (t) => {
   await a.command('delete');
   assert.match(a.last(), /Deleted team shop/);
   assert.equal(a.status.text, undefined);
-  await until(() => b.status.text === undefined);
-  assert.ok(b.notices.some(n => /Team shop was deleted/.test(n)));
+  await until(() => b.notices.some(n => /Team shop was deleted/.test(n)));
+  assert.equal(b.status.text, undefined);
   await new Promise(resolve => setTimeout(resolve, 80));
   await a.command('');
   assert.doesNotMatch(a.last(), /shop/, 'A deleted team is not brought back by a late write');
