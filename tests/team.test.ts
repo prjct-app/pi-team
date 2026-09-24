@@ -96,7 +96,7 @@ test('two terminals join by name, see each other working, and a message arrives 
   assert.match(prompt.systemPrompt, /You are "backend" in team "shop"/);
   // Activity is written by backend's own terminal; reviewer sees it once it lands.
   const seen = { text: '' };
-  await until(() => /● 👑 backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
+  await until(() => /◆ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
     seen.text = (await b.tool('team_peers', {})).content[0].text;
   });
 
@@ -139,7 +139,7 @@ test('/team send carries what the person typed, and a taken role is refused', as
   await until(() => a.sent.length === 1);
   assert.match(a.sent[0]!.content, /From the person at this terminal: Please rebase on main/);
   await a.command('');
-  assert.match(a.last(), /team shop · you are backend\n● 👑 backend \(you\)[^\n]*\n● docs/);
+  assert.match(a.last(), /team shop · you are backend\n◇ backend \(you\)[^\n]*\n○ docs/);
 });
 
 test('reload keeps the role: it is released on shutdown and taken back on start', async (t) => {
@@ -196,9 +196,11 @@ test('the panel lists every team with its members, and the timeline in detail', 
   assert.match(spec.summary!(), /you are reviewer in shop · 2 teams/);
   const items = spec.items();
   assert.deepEqual(items.map(item => [item.label, item.meta]), [
-    ['shop', '2/3 online · 1 working · you'], ['  backend', 'working 3m'], ['  👑 reviewer (you)', 'idle 10s'], ['  docs', 'offline'],
-    ['infra', '1/1 online'], ['  👑 ops', 'online'],
+    ['shop', '2/3 online · 1 working · you'], ['  backend', 'working 3m'], ['  reviewer (you)', 'idle 10s'], ['  docs', 'offline'],
+    ['infra', '1/1 online'], ['  ops', 'online'],
   ]);
+  // Shape says what a row is: squares are teams, diamonds the admin, dots members.
+  assert.deepEqual(items.map(item => item.symbol), ['■', '●', '◇', '○', '■', '◇']);
   const team = spec.detail(items[0]!);
   const timeline = team.sections!.find(section => section.title.startsWith('Timeline'))!.lines;
   assert.equal(timeline.length, 3);

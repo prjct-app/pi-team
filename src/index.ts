@@ -8,7 +8,7 @@ import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
 import { MAX_BODY_BYTES, MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
 import { ago, clean } from './team/text.ts';
-import { CROWN, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
+import { mark, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 
 export type InstallTeamOptions = {
   /** Storage root; defaults to ${PRJCT_HOME:-~/.prjct}/pi-team. */
@@ -44,8 +44,8 @@ type Slot = {
 
 /** "● backend  working 3m · implement the login endpoint  ~/app" */
 export function teammateLine(mate: Teammate, now: number): string {
-  const dot = mate.online ? '●' : '○';
-  const who = `${mate.admin ? `${CROWN} ` : ''}${mate.role}${mate.self ? ' (you)' : ''}`;
+  const dot = mark(mate);
+  const who = `${mate.role}${mate.self ? ' (you)' : ''}`;
   if (!mate.online) return `${dot} ${who}  offline`;
   const activity = mate.activity;
   const state = activity ? `${activity.state} ${ago(activity.since, now)}` : 'online';

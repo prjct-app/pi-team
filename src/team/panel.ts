@@ -29,8 +29,17 @@ export type TeamPanelOps = Readonly<{
   now(): number;
 }>;
 
-/** Marks the admin, left of its name. */
-export const CROWN = '👑';
+/**
+ * The admin is told apart by shape, not by a word or a picture: a diamond
+ * where everyone else has a dot, filled while working, hollow while idle.
+ */
+export const LEAD = { working: '◆', idle: '◇' } as const;
+/** Teams are squares: filled while anyone is online. Shapes say what a row is; color says its state. */
+export const TEAM_MARK = { live: '■', empty: '□' } as const;
+/** The state mark for a member: dots for members, diamonds for the admin. */
+export const mark = (mate: Pick<Teammate, 'admin' | 'online' | 'activity'>): string =>
+  mate.admin ? (mate.online && mate.activity?.state === 'working' ? LEAD.working : LEAD.idle)
+    : mate.online && mate.activity?.state === 'working' ? SYMBOL.active : SYMBOL.idle;
 const TEAM = 'team:';
 const MEMBER = 'member:';
 export const teamItemId = (teamId: string): string => `${TEAM}${teamId}`;
@@ -49,8 +58,8 @@ const held = (mate: Teammate, now: number): string => {
   return `${mate.activity.state} ${ago(time(mate.activity.since), now).replace(/ ago$/, '')}`;
 };
 const look = (mate: Teammate): [string, Tone] =>
-  !mate.online ? [SYMBOL.idle, 'dim'] : mate.activity?.state === 'working' ? [SYMBOL.active, 'accent'] : [SYMBOL.idle, 'success'];
-const named = (mate: Teammate): string => `${mate.admin ? `${CROWN} ` : ''}${mate.role}${mate.self ? ' (you)' : ''}`;
+  [mark(mate), !mate.online ? 'dim' : mate.activity?.state === 'working' ? 'accent' : 'success'];
+const named = (mate: Teammate): string => `${mate.role}${mate.self ? ' (you)' : ''}`;
 
 /** One timeline line: "18:02:11  reviewer → backend question: Which code?" */
 export function eventLine(event: TeamEvent): string {
@@ -163,7 +172,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
         const working = entry.mates.filter(mate => mate.online && mate.activity?.state === 'working').length;
         const mine = inTeam(entry.id);
         const head: PanelItem = {
-          id: teamItemId(entry.id), label: entry.name, symbol: mine ? SYMBOL.mode : online ? SYMBOL.active : SYMBOL.idle,
+          id: teamItemId(entry.id), label: entry.name, symbol: online ? TEAM_MARK.live : TEAM_MARK.empty,
           tone: mine ? 'accent' : online ? 'success' : 'dim',
           meta: `${online}/${entry.mates.length} online${working ? ` · ${working} working` : ''}${mine ? ' · you' : ''}`,
         };
@@ -180,7 +189,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
       if (team && mate) {
         const trace = team.events.filter(event => event.byId === mate.id || event.toId === mate.id).reverse();
         return {
-          title: named(mate),
+          title: `${mate.admin ? `${LEAD.working} ` : ''}${named(mate)}`,
           subtitle: `${held(mate, now)} · team ${team.name} · ${whyNot(item) ?? 'Enter or m to message'}`, subtitleTone: look(mate)[1],
           fields: [
             { label: 'on', value: mate.activity?.focus ? one(mate.activity.focus, 400) : '—' },
@@ -199,7 +208,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
         subtitle: member ? `You are ${cell.value.joined!.role}. Messages are delivered now or refused now; nothing queues.` : 'You are not in this team. Press a or Enter to join.',
         subtitleTone: member ? 'accent' : 'muted',
         fields: [
-          { label: 'admin', value: admin ? `${CROWN} ${admin.role}` : '—' },
+          { label: LEAD.working, value: admin ? admin.role : '—' },
           { label: 'online', value: team.mates.filter(entry => entry.online).map(entry => entry.role).join(', ') || '—' },
           { label: 'offline', value: team.mates.filter(entry => !entry.online).map(entry => entry.role).join(', ') || '—' },
           { label: 'id', value: team.id },
