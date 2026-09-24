@@ -91,15 +91,19 @@ export class MembershipService {
     readonly sessionId: string;
     readonly cwd: string;
     readonly kind: MemberKind;
+    /** Rejoin this exact member (its address survives renames); otherwise matched by alias. */
+    readonly memberId?: string;
   }): Promise<Membership> {
     return withStorageLock(this.lockPath(input.teamId), async () => {
       const team = await this.teams.read(input.teamId);
       if (!team) throw Object.assign(new Error(`Unknown team "${input.teamId}".`), { code: 'NOT_FOUND' });
       if (team.state !== 'open') throw Object.assign(new Error(`Team "${input.teamId}" is ${team.state}.`), { code: 'TEAM_CLOSED' });
-      const matching = (await this.teams.listMembers(input.teamId)).filter(member => member.alias === input.alias);
+      const members = await this.teams.listMembers(input.teamId);
+      const byId = input.memberId ? members.filter(member => member.memberId === input.memberId) : [];
+      const matching = byId.length ? byId : members.filter(member => member.alias === input.alias);
       const active = matching.find(member => member.state === 'active');
       if (active && await this.presence.online(active)) {
-        throw Object.assign(new Error(`Alias "${input.alias}" is already active.`), { code: 'ALREADY_EXISTS' });
+        throw Object.assign(new Error(`Alias "${active.alias}" is already active.`), { code: 'ALREADY_EXISTS' });
       }
       const previous = active ?? [...matching].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
       const memberId = previous?.memberId ?? randomUUID();
@@ -147,7 +151,9 @@ export class MembershipService {
 
   async assertOwner(membership: Membership): Promise<Member> {
     const { member } = await this.presence.assertOwner(membership);
-    if (member.sessionId !== membership.sessionId || member.alias !== membership.alias) {
+    // Identity is the member ID, generation, lease and session. The alias is a
+    // display label that may be renamed while the member is online.
+    if (member.sessionId !== membership.sessionId) {
       throw Object.assign(new Error('Membership identity has been replaced.'), { code: 'FENCED' });
     }
     return member;

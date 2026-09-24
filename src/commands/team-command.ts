@@ -2,13 +2,15 @@ import type { AutocompleteItem } from '@earendil-works/pi-tui';
 import { completer, type CommandOption } from '@prjct.app/pi-tui-kit';
 import { TEAM_ID_PATTERN } from '../domain/team.ts';
 
-export const TEAM_HELP = '/team join <team> <role> | send <role> <message> | leave | remove <role> | delete | status | help';
+export const TEAM_HELP = '/team join <team> <role> | send <role> <message> | rename <team-name> | rename-role <role> <new-role> | leave | remove <role> | delete | status | help';
 export type TeamCommand =
   | { readonly action: 'status' }
   | { readonly action: 'leave' }
   | { readonly action: 'help' }
   | { readonly action: 'delete' }
   | { readonly action: 'remove'; readonly role: string }
+  | { readonly action: 'rename'; readonly name: string }
+  | { readonly action: 'rename-role'; readonly role: string; readonly name: string }
   | { readonly action: 'join'; readonly team: string; readonly role: string }
   | { readonly action: 'send'; readonly to: string; readonly body: string };
 
@@ -22,6 +24,14 @@ export function parseTeamCommand(input: string): TeamCommand {
   if (!text) return { action: 'status' };
   const [first, ...args] = text.split(/\s+/);
   const action = first!.toLowerCase();
+  if (action === 'rename') {
+    if (args.length !== 1) throw new Error('Usage: /team rename <new-team-name>');
+    return { action, name: name(args[0], 'Team') };
+  }
+  if (action === 'rename-role') {
+    if (args.length !== 2) throw new Error('Usage: /team rename-role <role> <new-role>');
+    return { action, role: name(args[0], 'Role'), name: name(args[1], 'Role') };
+  }
   if (action === 'remove') {
     if (args.length !== 1) throw new Error('Usage: /team remove <role>');
     return { action, role: name(args[0], 'Role') };
@@ -52,8 +62,10 @@ export function commandCompletions(known: { readonly teams: () => readonly strin
     { value: 'send', description: 'message a teammate now; never queued', options: roles },
     { value: 'status', description: 'who is online and what each is doing' },
     { value: 'leave', description: 'leave the team (asks first)' },
-    { value: 'remove', description: 'admin: take a member out of the team', options: roles },
-    { value: 'delete', description: 'admin: delete the team you created' },
+    { value: 'remove', description: 'admin: take a member out of the team (asks first)', options: roles },
+    { value: 'delete', description: 'admin: delete the team you created (asks first)' },
+    { value: 'rename', description: 'admin: rename the team (asks first)' },
+    { value: 'rename-role', description: 'rename your role, or any role as admin (asks first)', options: roles },
     { value: 'help', description: 'what /team accepts' },
   ]);
 }

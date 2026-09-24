@@ -26,9 +26,13 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 
 `TeamSession.record` appends to `teams/<team>/events.json` (the last 300 events, under a storage lock): `joined` (with cwd), `left`, `working` (with focus, only when state or focus changes), `idle`, `message` (full text), and `refused` (offline or unknown recipient). Tracing is best-effort and never blocks the work it traces.
 
+## Identity
+
+Teams are created as `t-<uuid>` directories with `profile.json` (`name`, `adminId`, `createdAt`). Names are unique under a `team-names` lock, which covers creation and rename. Members are UUIDs. Membership ownership is checked by member ID, generation, presence lease and session, not by alias, so an alias can be renamed while the member is online. `heartbeat` picks up new names. Events store member IDs (`by`, `to`) and are resolved to current aliases when read. The session entry stores `{ teamId, memberId, team, role }`. On restore, `memberships.join` rejoins that exact member by ID, under whatever alias it has now. Legacy teams without a profile are named by their directory, and their first member is admin.
+
 ## Admin, removal and deletion
 
-The admin of a team is the member with the earliest `joinedAt` (the creator; rejoining keeps `joinedAt`). `removeMember` records a `removed` event first and then marks the member `left`, which fences its presence. `deleteTeam` removes `teams/<team>/` under the team lock. `setActivity` and `record` check that the team still exists, so a late write cannot bring back a half directory. On a failed heartbeat (every 5 s), `fate` tells the terminal whether the team was deleted, the role was removed (and by whom), or another terminal took it. Removed and deleted are remembered in the session, so a reload does not rejoin.
+The admin is the creator's member ID, stored in the profile. Only the admin may rename the team, rename other members, remove members, or delete the team; a member may rename itself. Every one of these, and leave, is confirmed in the UI before it runs. `removeMember` records a `removed` event first and then marks the member `left`, which fences its presence. `deleteTeam` removes `teams/<team>/` under the team lock. `setActivity` and `record` check that the team still exists, so a late write cannot bring back a half directory. On a failed heartbeat (every 5 s), `fate` tells the terminal whether the team was deleted, the role was removed (and by whom), or another terminal took it. Removed and deleted are remembered in the session, so a reload does not rejoin.
 
 ## Transport
 

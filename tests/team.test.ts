@@ -28,7 +28,7 @@ function terminal(root: string, sessionId: string, entries: unknown[] = []) {
     appendEntry: (customType: string, data: unknown) => entries.push({ type: 'custom', customType, data }),
     registerMessageRenderer() {},
   } as unknown as ExtensionAPI;
-  installTeam(api, { root, pollMs: 10, heartbeatMs: 20, complete: async (_s, user) => user });
+  installTeam(api, { root, pollMs: 10, heartbeatMs: 100, complete: async (_s, user) => user });
   return {
     active, notices, sent, status, idle, entries, tools, root, confirms,
     command: (s: string) => commands.get('team').handler(s, ctx),
@@ -96,7 +96,7 @@ test('two terminals join by name, see each other working, and a message arrives 
   assert.match(prompt.systemPrompt, /You are "backend" in team "shop"/);
   // Activity is written by backend's own terminal; reviewer sees it once it lands.
   const seen = { text: '' };
-  await until(() => /● backend · admin {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
+  await until(() => /● ♛ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
     seen.text = (await b.tool('team_peers', {})).content[0].text;
   });
 
@@ -139,7 +139,7 @@ test('/team send carries what the person typed, and a taken role is refused', as
   await until(() => a.sent.length === 1);
   assert.match(a.sent[0]!.content, /From the person at this terminal: Please rebase on main/);
   await a.command('');
-  assert.match(a.last(), /team shop · you are backend\n● backend · admin \(you\)[^\n]*\n● docs/);
+  assert.match(a.last(), /team shop · you are backend\n● ♛ backend \(you\)[^\n]*\n● docs/);
 });
 
 test('reload keeps the role: it is released on shutdown and taken back on start', async (t) => {
@@ -177,27 +177,27 @@ test('the panel lists every team with its members, and the timeline in detail', 
   const { teamPanelSpec } = await import('../src/team/panel.ts');
   const now = Date.parse('2026-09-23T12:00:00.000Z');
   const shop = {
-    team: 'shop',
+    id: 't-shop', name: 'shop',
     mates: [
-      { role: 'backend', online: true, cwd: '/w/b', self: false, admin: false, activity: { state: 'working' as const, since: '2026-09-23T11:57:00.000Z', focus: 'Implement login' } },
-      { role: 'reviewer', online: true, cwd: '/w/r', self: true, admin: true, activity: { state: 'idle' as const, since: '2026-09-23T11:59:50.000Z' } },
-      { role: 'docs', online: false, cwd: '/w/d', self: false, admin: false },
+      { id: 'm-b', role: 'backend', online: true, cwd: '/w/b', self: false, admin: false, activity: { state: 'working' as const, since: '2026-09-23T11:57:00.000Z', focus: 'Implement login' } },
+      { id: 'm-r', role: 'reviewer', online: true, cwd: '/w/r', self: true, admin: true, activity: { state: 'idle' as const, since: '2026-09-23T11:59:50.000Z' } },
+      { id: 'm-d', role: 'docs', online: false, cwd: '/w/d', self: false, admin: false },
     ],
     events: [
-      { at: '2026-09-23T11:57:00.000Z', type: 'working' as const, role: 'backend', text: 'Implement login' },
-      { at: '2026-09-23T11:58:00.000Z', type: 'message' as const, role: 'reviewer', to: 'backend', kind: 'question' as const, text: 'Which code?' },
-      { at: '2026-09-23T11:59:00.000Z', type: 'refused' as const, role: 'reviewer', to: 'docs', kind: 'info' as const, text: 'offline' },
+      { at: '2026-09-23T11:57:00.000Z', type: 'working' as const, byId: 'm-b', role: 'backend', text: 'Implement login' },
+      { at: '2026-09-23T11:58:00.000Z', type: 'message' as const, byId: 'm-r', role: 'reviewer', toId: 'm-b', to: 'backend', kind: 'question' as const, text: 'Which code?' },
+      { at: '2026-09-23T11:59:00.000Z', type: 'refused' as const, byId: 'm-r', role: 'reviewer', toId: 'm-d', to: 'docs', kind: 'info' as const, text: 'offline' },
     ],
   };
-  const other = { team: 'infra', mates: [{ role: 'ops', online: true, cwd: '/w/o', self: false, admin: true }], events: [] };
-  const snapshot = { joined: { team: 'shop', role: 'reviewer' }, teams: [shop, other] };
+  const other = { id: 't-infra', name: 'infra', mates: [{ id: 'm-o', role: 'ops', online: true, cwd: '/w/o', self: false, admin: true }], events: [] };
+  const snapshot = { joined: { teamId: 't-shop', memberId: 'm-r', team: 'shop', role: 'reviewer' }, teams: [shop, other] };
   const requests: unknown[] = [];
   const spec = teamPanelSpec({ load: async () => snapshot, request: intent => requests.push(intent), now: () => now }, snapshot);
   assert.match(spec.summary!(), /you are reviewer in shop · 2 teams/);
   const items = spec.items();
   assert.deepEqual(items.map(item => [item.label, item.meta]), [
-    ['shop', '2/3 online · 1 working · you'], ['  backend', 'working 3m'], ['  reviewer · admin (you)', 'idle 10s'], ['  docs', 'offline'],
-    ['infra', '1/1 online'], ['  ops · admin', 'online'],
+    ['shop', '2/3 online · 1 working · you'], ['  backend', 'working 3m'], ['  ♛ reviewer (you)', 'idle 10s'], ['  docs', 'offline'],
+    ['infra', '1/1 online'], ['  ♛ ops', 'online'],
   ]);
   const team = spec.detail(items[0]!);
   const timeline = team.sections!.find(section => section.title.startsWith('Timeline'))!.lines;
@@ -234,15 +234,25 @@ test('the panel lists every team with its members, and the timeline in detail', 
   await key('x').run(items[1], control);
   await key('l').run(items[0], control);
   await key('d').run(items[0], control);
+  assert.equal(key('r').when!(items[0]), true, 'The admin renames its team');
+  assert.equal(key('r').when!(items[1]), true, 'The admin renames a member');
+  assert.equal(key('r').when!(items[4]), false, 'Not a team you are not in');
+  await key('r').run(items[0], control);
+  await key('r').run(items[1], control);
   assert.deepEqual(requests, [
-    { action: 'message', team: 'shop', role: 'backend' }, { action: 'join', team: 'infra' }, { action: 'create' },
-    { action: 'remove', team: 'shop', role: 'backend' }, { action: 'leave', team: 'shop' }, { action: 'delete', team: 'shop' },
+    { action: 'message', teamId: 't-shop', memberId: 'm-b', role: 'backend' }, { action: 'join', teamId: 't-infra', team: 'infra' }, { action: 'create' },
+    { action: 'remove', teamId: 't-shop', memberId: 'm-b', role: 'backend' }, { action: 'leave', teamId: 't-shop', team: 'shop' }, { action: 'delete', teamId: 't-shop', team: 'shop' },
+    { action: 'rename-team', teamId: 't-shop', team: 'shop' }, { action: 'rename-member', teamId: 't-shop', memberId: 'm-b', role: 'backend' },
   ]);
   const notAdmin = teamPanelSpec({ load: async () => snapshot, request() {}, now: () => now },
-    { ...snapshot, joined: { team: 'shop', role: 'backend' }, teams: [{ ...shop, mates: shop.mates.map(mate => ({ ...mate, self: mate.role === 'backend' })) }] });
+    { joined: { teamId: 't-shop', memberId: 'm-b', team: 'shop', role: 'backend' }, teams: [{ ...shop, mates: shop.mates.map(mate => ({ ...mate, self: mate.role === 'backend' })) }] });
   const byBackend = notAdmin.items();
-  assert.equal(notAdmin.actions!.find(action => action.key === 'x')!.when!(byBackend[3]), false, 'Only the admin removes');
-  assert.equal(notAdmin.actions!.find(action => action.key === 'd')!.when!(byBackend[0]), false, 'Only the admin deletes');
+  const on = (k: string) => notAdmin.actions!.find(action => action.key === k)!;
+  assert.equal(on('x').when!(byBackend[3]), false, 'Only the admin removes');
+  assert.equal(on('d').when!(byBackend[0]), false, 'Only the admin deletes');
+  assert.equal(on('r').when!(byBackend[0]), false, 'Only the admin renames the team');
+  assert.equal(on('r').when!(byBackend[1]), true, 'A member renames itself');
+  assert.equal(on('r').when!(byBackend[3]), false, 'But not others');
 });
 
 test('the team timeline records joins, work, messages, refusals and leaves', async (t) => {
@@ -256,14 +266,16 @@ test('the team timeline records joins, work, messages, refusals and leaves', asy
   const reader = new TeamSession(new TeamRuntime(new TeamPaths(a.root)));
   const seen = { types: [] as string[] };
   // Each terminal writes its own events; wait for backend's before reviewer acts, so the order is fixed.
-  await until(() => seen.types.includes('working'), 2000, async () => { seen.types = (await reader.events('shop')).map(event => event.type); });
+  const shopId = (await reader.findTeam('shop'))!;
+  assert.match(shopId, /^t-[0-9a-f-]{36}$/, 'Teams are stored by UUID, not by name');
+  await until(() => seen.types.includes('working'), 2000, async () => { seen.types = (await reader.events(shopId)).map(event => event.type); });
   await b.tool('team_message', { to: 'backend', kind: 'question', body: 'Which code?' });
   await b.tool('team_message', { to: 'docs', kind: 'info', body: 'hi' }).catch(() => {});
   await a.command('leave');
   await until(() => seen.types.includes('left'), 2000, async () => {
-    seen.types = (await reader.events('shop')).map(event => `${event.type}`);
+    seen.types = (await reader.events(shopId)).map(event => `${event.type}`);
   });
-  const events = await reader.events('shop');
+  const events = await reader.events(shopId);
   assert.deepEqual(events.map(event => [event.type, event.role, event.to ?? '']), [
     ['joined', 'backend', ''], ['joined', 'reviewer', ''], ['working', 'backend', ''],
     ['message', 'reviewer', 'backend'], ['refused', 'reviewer', 'docs'], ['left', 'backend', ''],
@@ -338,4 +350,59 @@ test('the admin deletes its team; every other terminal is told', async (t) => {
   await new Promise(resolve => setTimeout(resolve, 80));
   await a.command('');
   assert.doesNotMatch(a.last(), /shop/, 'A deleted team is not brought back by a late write');
+});
+
+test('renames keep identity: the team and a role get new names, the trace and connection stay', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  await b.command('rename store');
+  assert.match(b.last(), /Only the admin of shop \(backend\)/);
+  a.confirms.answer = false;
+  await a.command('rename store');
+  assert.equal(a.status.text, 'team shop · backend', 'Declined: nothing renamed');
+  a.confirms.answer = true;
+  await a.command('rename store');
+  assert.equal(a.status.text, 'team store · backend');
+  await a.command('rename-role reviewer qa');
+  assert.match(a.last(), /Renamed reviewer to qa/);
+  // The renamed terminal stays connected and learns its new names.
+  await until(() => b.status.text === 'team store · qa');
+  assert.ok(b.notices.some(n => /you are now qa in store/.test(n)));
+  await a.tool('team_message', { to: 'qa', kind: 'info', body: 'hello qa' });
+  await until(() => b.sent.length === 1);
+  await b.command('rename-role qa tester');
+  assert.equal(b.status.text, 'team store · tester', 'A member renames itself');
+  await b.command('rename-role backend boss');
+  assert.match(b.last(), /Only the admin/);
+  await b.command('join store other').catch(() => {});
+  await b.command('join shop x');
+  assert.match(b.last(), /Created and joined team shop/, 'The old name is free again, as a new team');
+});
+
+test('every destructive action asks first; declining changes nothing', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  a.confirms.answer = false;
+  await a.command('remove reviewer');
+  await a.command('delete');
+  await a.command('rename-role reviewer qa');
+  await a.command('leave');
+  assert.equal(a.status.text, 'team shop · backend');
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(b.status.text, 'team shop · reviewer');
+});
+
+test('reload rejoins by ID, even after the role was renamed while away', async (t) => {
+  const make = await setup(t);
+  const entries: unknown[] = [];
+  const admin = await make('s-admin');
+  await admin.command('join shop lead');
+  const a = await make('s-a', entries);
+  await a.command('join shop backend');
+  await a.emit('session_shutdown', { reason: 'reload' });
+  await admin.command('rename-role backend api');
+  const again = await make('s-a', entries);
+  assert.equal(again.status.text, 'team shop · api');
 });

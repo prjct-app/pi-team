@@ -6,10 +6,9 @@ import { ENGLISH_RULE, SYMBOL, brand, cheapComplete, openPanel, row, toEnglishIn
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
-import { MAX_BODY_BYTES, MESSAGE_KINDS, TeamSession, type Fate, type Incoming, type Teammate } from './team/session.ts';
+import { MAX_BODY_BYTES, MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
 import { ago, clean } from './team/text.ts';
-import { memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
-import { TEAM_ID_PATTERN } from './domain/team.ts';
+import { CROWN, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 
 export type InstallTeamOptions = {
   /** Storage root; defaults to ${PRJCT_HOME:-~/.prjct}/pi-team. */
@@ -28,7 +27,8 @@ const TOOLS = ['team_peers', 'team_message'];
 export const AUTO_TURN_LIMIT = 6;
 const HEARTBEAT_MS = 5_000;
 
-type Membership = { readonly team: string; readonly role: string } | { readonly left: true };
+/** Saved in the session by ID; `{ team, role }` without IDs comes from before IDs and is matched by name. */
+type Membership = Saved | { readonly team: string; readonly role: string; readonly teamId?: undefined } | { readonly left: true };
 type Slot = {
   readonly ctx?: ExtensionContext;
   readonly timer?: ReturnType<typeof setInterval>;
@@ -45,7 +45,7 @@ type Slot = {
 /** "● backend  working 3m · implement the login endpoint  ~/app" */
 export function teammateLine(mate: Teammate, now: number): string {
   const dot = mate.online ? '●' : '○';
-  const who = `${mate.role}${mate.admin ? ' · admin' : ''}${mate.self ? ' (you)' : ''}`;
+  const who = `${mate.admin ? `${CROWN} ` : ''}${mate.role}${mate.self ? ' (you)' : ''}`;
   if (!mate.online) return `${dot} ${who}  offline`;
   const activity = mate.activity;
   const state = activity ? `${activity.state} ${ago(activity.since, now)}` : 'online';
@@ -80,7 +80,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     if (ctx?.hasUI) ctx.ui.setStatus('team', joined ? `team ${joined.team} · ${joined.role}` : undefined);
   };
   const refreshCompletions = async (): Promise<void> => {
-    const teams = await session.teams();
+    const teams = (await session.teams()).map(team => team.name);
     const roles = (await session.teammates()).filter(mate => !mate.self && mate.online).map(mate => mate.role);
     store.set(slot => ({ ...slot, teams, roles }));
   };
@@ -93,7 +93,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const joined = session.current();
     if (!joined) {
       const teams = await session.teams();
-      return `Not in a team.${teams.length ? ` Teams: ${teams.join(', ')}.` : ''}\n${TEAM_HELP}`;
+      return `Not in a team.${teams.length ? ` Teams: ${teams.map(team => team.name).join(', ')}.` : ''}\n${TEAM_HELP}`;
     }
     const mates = await session.teammates();
     return [`team ${joined.team} · you are ${joined.role}`, ...mates.map(mate => teammateLine(mate, now()))].join('\n');
@@ -140,13 +140,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   };
 
   const snapshot = async (): Promise<TeamSnapshot> => {
-    const joined = session.current();
-    return { ...(joined ? { joined: { team: joined.team, role: joined.role } } : {}), teams: await session.overview() };
-  };
-  /** Checked before asking, so nobody confirms something they are not allowed to do. */
-  const requireAdmin = async (team: string, role: string): Promise<void> => {
-    const admin = await session.adminOf(team);
-    if (admin !== role) throw new Error(`Only the admin of ${team} (${admin ?? 'nobody'}) can do that.`);
+    const joined = session.saved();
+    return { ...(joined ? { joined } : {}), teams: await session.overview() };
   };
   const deleteTeam = async (): Promise<string> => {
     const team = await session.deleteTeam();
@@ -161,8 +156,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return left ? `Left team ${left.team}.` : 'Not in a team.';
   };
 
-  const joinTeam = async (ctx: ExtensionContext, team: string, role: string): Promise<boolean> => {
-    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd });
+  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved): Promise<boolean> => {
+    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}) });
     registerTools(); toolsOn(true); showMembership();
     store.set(slot => ({ ...slot, autoTurns: 0, pausedNotice: false, beatAt: now() }));
     await refreshCompletions();
@@ -170,14 +165,27 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   };
   const dropMembership = (): void => { toolsOn(false); showMembership(); };
   /** Join, remember it in the session, and say so. */
+  const remember = (): void => { const saved = session.saved(); if (saved) pi.appendEntry<Membership>(ENTRY, saved); };
   const enter = async (ctx: ExtensionContext, team: string, role: string): Promise<string> => {
     const created = await joinTeam(ctx, team, role);
-    pi.appendEntry<Membership>(ENTRY, { team, role });
+    remember();
     return `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
   };
   const sendFromPerson = async (ctx: ExtensionContext, to: string, text: string): Promise<void> => {
     const body = await toEnglishInstructions(text, options.complete ?? cheapComplete(ctx));
     await session.send(to, 'info', `From the person at this terminal: ${body}`);
+  };
+
+  /** Every removal, deletion, departure and rename is confirmed first. */
+  const confirm = (ctx: ExtensionContext, title: string, detail: string): Promise<boolean> => ctx.ui.confirm(title, detail);
+  const renameTeam = async (next: string): Promise<string> => {
+    const before = session.current()?.team;
+    await session.renameTeam(next); showMembership(); remember();
+    return `Renamed team ${before} to ${next}.`;
+  };
+  const renameMember = async (role: string, next: string): Promise<string> => {
+    await session.renameMember(role, next); showMembership(); remember(); await refreshCompletions();
+    return `Renamed ${role} to ${next}.`;
   };
 
   /** Asks for what the panel action needs; returns the row to select when the panel opens again. */
@@ -189,34 +197,46 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       return value;
     };
     if (intent.action === 'leave') {
-      if (await ctx.ui.confirm(`Leave team ${intent.team}?`, 'Teammates will see you offline. You can join again later.')) output(await queue(leaveTeam));
-      return teamItemId(intent.team);
+      if (await confirm(ctx, `Leave team ${intent.team}?`, 'Teammates will see you offline. You can join again later.')) output(await queue(leaveTeam));
+      return teamItemId(intent.teamId);
     }
     if (intent.action === 'remove') {
-      if (await ctx.ui.confirm(`Remove ${intent.role} from ${intent.team}?`, `${intent.role}'s terminal leaves the team within seconds. It can join again.`)) {
+      if (await confirm(ctx, `Remove ${intent.role}?`, `${intent.role}'s terminal leaves the team within seconds. It can join again.`)) {
         await queue(() => session.removeMember(intent.role));
-        output(`Removed ${intent.role} from ${intent.team}.`);
+        output(`Removed ${intent.role}.`);
       }
-      return teamItemId(intent.team);
+      return teamItemId(intent.teamId);
     }
     if (intent.action === 'delete') {
-      if (!await ctx.ui.confirm(`Delete team ${intent.team}?`, 'Deletes its members, messages and timeline for everyone. This cannot be undone.')) return teamItemId(intent.team);
+      if (!await confirm(ctx, `Delete team ${intent.team}?`, 'Deletes its members, messages and timeline for everyone. This cannot be undone.')) return teamItemId(intent.teamId);
       output(await queue(deleteTeam));
       return undefined;
     }
+    if (intent.action === 'rename-team') {
+      const next = await ask(`New name for ${intent.team}`, intent.team, NAME_PATTERN);
+      if (next && next !== intent.team && await confirm(ctx, `Rename team ${intent.team} to ${next}?`, 'Its ID, members and timeline stay; everyone sees the new name.')) output(await queue(() => renameTeam(next)));
+      return teamItemId(intent.teamId);
+    }
+    if (intent.action === 'rename-member') {
+      const next = await ask(`New role for ${intent.role}`, intent.role, NAME_PATTERN);
+      if (next && next !== intent.role && await confirm(ctx, `Rename ${intent.role} to ${next}?`, 'Same member, same ID and history; teammates message it by the new name.')) output(await queue(() => renameMember(intent.role, next)));
+      return memberItemId(intent.teamId, intent.memberId);
+    }
     if (intent.action === 'message') {
       const text = await ask(`Message to ${intent.role}`, 'Delivered now; nothing queues');
-      if (!text) return memberItemId(intent.team, intent.role);
-      await queue(() => sendFromPerson(ctx, intent.role, text));
-      output(`Delivered to ${intent.role}.`);
-      return memberItemId(intent.team, intent.role);
+      if (text) {
+        await queue(() => sendFromPerson(ctx, intent.role, text));
+        output(`Delivered to ${intent.role}.`);
+      }
+      return memberItemId(intent.teamId, intent.memberId);
     }
-    const team = intent.action === 'join' ? intent.team : await ask('New team name', 'shop', TEAM_ID_PATTERN);
+    const team = intent.action === 'join' ? intent.team : await ask('New team name', 'shop', NAME_PATTERN);
     if (!team) return undefined;
-    const role = await ask(`Your role in ${team}`, 'backend', TEAM_ID_PATTERN);
+    const role = await ask(`Your role in ${team}`, 'backend', NAME_PATTERN);
     if (!role) return undefined;
     output(await queue(() => enter(ctx, team, role)));
-    return memberItemId(team, role);
+    const saved = session.saved();
+    return saved ? memberItemId(saved.teamId, saved.memberId) : undefined;
   };
   /** The panel; actions that need typed input close it, ask, and open it again. */
   const openTeamPanel = async (ctx: ExtensionContext, select?: string): Promise<void> => {
@@ -251,10 +271,11 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     if (slot.closed || !ctx || !session.current()) return;
     if (now() - slot.beatAt >= (options.heartbeatMs ?? HEARTBEAT_MS)) {
       store.set(current => ({ ...current, beatAt: now() }));
-      const lost = await session.heartbeat();
+      const beat = await session.heartbeat();
+      const lost = beat.lost;
       if (lost) {
         dropMembership();
-        const fate: Fate = await session.fate(lost.team, lost.role).catch((): Fate => ({ reason: 'replaced' }));
+        const fate: Fate = await session.fate(lost.teamId, lost.memberId).catch((): Fate => ({ reason: 'replaced' }));
         // Removed or deleted is final for this session; a replaced role may come back on reload.
         if (fate.reason !== 'replaced') pi.appendEntry<Membership>(ENTRY, { left: true });
         output(fate.reason === 'deleted' ? `Team ${lost.team} was deleted.`
@@ -262,13 +283,17 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           : `Another terminal took the role ${lost.role}, so this one left ${lost.team}.`, 'error');
         return;
       }
+      if (beat.renamed) {
+        showMembership(); remember();
+        output(`Team: you are now ${beat.renamed.role} in ${beat.renamed.team}.`);
+      }
       await refreshCompletions().catch(() => {});
     }
     for (const message of await session.receive()) deliver(ctx, message);
   };
 
   pi.registerCommand('team', {
-    description: brand('team: join <team> <role> | send <role> <message> | leave | status'),
+    description: brand('team: panel | join <team> <role> | send <role> <message> | rename | leave'),
     getArgumentCompletions: commandCompletions({ teams: () => store.get().teams, roles: () => store.get().roles }),
     handler: (input, ctx) => queue(async () => {
       store.set(slot => ({ ...slot, ctx }));
@@ -293,10 +318,26 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           output(await leaveTeam());
           return;
         }
+        if (command.action === 'rename') {
+          const joined = session.current();
+          if (!joined) throw new Error('Not in a team.');
+          await session.assertAdmin();
+          if (ctx.hasUI && !await confirm(ctx, `Rename team ${joined.team} to ${command.name}?`, 'Its ID, members and timeline stay; everyone sees the new name.')) return;
+          output(await renameTeam(command.name));
+          return;
+        }
+        if (command.action === 'rename-role') {
+          const joined = session.current();
+          if (!joined) throw new Error('Not in a team.');
+          if (command.role !== joined.role) await session.assertAdmin();
+          if (ctx.hasUI && !await confirm(ctx, `Rename ${command.role} to ${command.name}?`, 'Same member, same ID and history; teammates message it by the new name.')) return;
+          output(await renameMember(command.role, command.name));
+          return;
+        }
         if (command.action === 'remove') {
           const joined = session.current();
           if (!joined) throw new Error('Not in a team.');
-          await requireAdmin(joined.team, joined.role);
+          await session.assertAdmin();
           if (ctx.hasUI && !await ctx.ui.confirm(`Remove ${command.role} from ${joined.team}?`, `${command.role}'s terminal leaves the team within seconds.`)) return;
           await session.removeMember(command.role);
           output(`Removed ${command.role} from ${joined.team}.`);
@@ -305,7 +346,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
         if (command.action === 'delete') {
           const joined = session.current();
           if (!joined) throw new Error('Not in a team.');
-          await requireAdmin(joined.team, joined.role);
+          await session.assertAdmin();
           if (ctx.hasUI && !await ctx.ui.confirm(`Delete team ${joined.team}?`, 'Deletes its members, messages and timeline for everyone. This cannot be undone.')) return;
           output(await deleteTeam());
           return;
@@ -334,7 +375,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const entries = ctx.sessionManager.getEntries() as readonly { type?: string; customType?: string; data?: Membership }[];
     const last = [...entries].reverse().find(entry => entry.type === 'custom' && entry.customType === ENTRY)?.data;
     if (last && 'team' in last) {
-      await queue(() => joinTeam(ctx, last.team, last.role)).catch(error => {
+      await queue(() => joinTeam(ctx, last.team, last.role, last.teamId ? last : undefined)).catch(error => {
         output(`Team: could not rejoin ${last.team} as ${last.role}: ${clean(error instanceof Error ? error.message : 'unknown error', 256)}`, 'error');
       });
     }

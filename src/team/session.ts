@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Type } from 'typebox';
 import { Value } from 'typebox/value';
-import { assertTeamId, TimestampSchema } from '../domain/team.ts';
+import { EntityIdSchema, TEAM_ID_PATTERN, TimestampSchema } from '../domain/team.ts';
+import type { Member } from '../domain/member.ts';
 import type { Membership } from '../runtime/membership.ts';
 import type { TeamRuntime } from '../runtime/team-runtime.ts';
 import { ensurePrivateDirectory, readJson, replaceAtomicJson, withStorageLock } from '../storage/atomic.ts';
@@ -15,6 +17,13 @@ import { bounded, clean } from './text.ts';
 export const MESSAGE_KINDS = ['info', 'question', 'handoff'] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
+/** Team names and roles: what people type. Identity is always the ID behind them. */
+export const NAME_PATTERN = TEAM_ID_PATTERN;
+export const assertName = (value: string, label: string): string => {
+  if (!NAME_PATTERN.test(value)) throw new Error(`${label} "${value}" is not valid: use 1–48 lowercase letters, digits or hyphens, starting with a letter.`);
+  return value;
+};
+
 /** What a terminal is doing right now, so a stall is visible instead of silent. */
 export type Activity = { readonly state: 'idle' | 'working'; readonly since: string; readonly focus?: string };
 const ActivitySchema = Type.Object({
@@ -26,26 +35,41 @@ const assertActivity = (value: unknown): asserts value is Activity => {
   if (!Value.Check(ActivitySchema, value)) throw new Error('Invalid teammate activity record.');
 };
 
+/** The team's display name and its admin, by member ID. The directory is named by the team ID. */
+type Profile = { readonly name: string; readonly adminId?: string; readonly createdAt: string };
+const ProfileSchema = Type.Object({
+  name: Type.String({ pattern: TEAM_ID_PATTERN.source }),
+  adminId: Type.Optional(EntityIdSchema),
+  createdAt: TimestampSchema,
+}, { additionalProperties: false });
+const assertProfile = (value: unknown): asserts value is Profile => {
+  if (!Value.Check(ProfileSchema, value)) throw new Error('Invalid team profile.');
+};
+
 export type Teammate = {
+  /** Member ID: the identity. `role` is its current, renameable name. */
+  readonly id: string;
   readonly role: string;
   readonly online: boolean;
   readonly cwd: string;
   readonly self: boolean;
-  /** The role that created the team: it may remove members and delete the team. */
+  /** Created the team: may rename it, rename and remove members, and delete it. */
   readonly admin: boolean;
   readonly activity?: Activity;
 };
 /** Why this terminal is no longer in its team. */
 export type Fate = { readonly reason: 'deleted' } | { readonly reason: 'removed'; readonly by: string } | { readonly reason: 'replaced' };
+
 /**
- * One thing that happened in a team, for the timeline: who joined or left,
- * who started or stopped working and on what, every message, every refused send.
+ * One thing that happened in a team. Stored by member ID, so renames never
+ * break the trace; shown with the names members have now.
  */
-export const EVENT_TYPES = ['joined', 'left', 'working', 'idle', 'message', 'refused', 'removed'] as const;
-export type TeamEvent = {
+export const EVENT_TYPES = ['joined', 'left', 'working', 'idle', 'message', 'refused', 'removed', 'renamed'] as const;
+export type EventType = (typeof EVENT_TYPES)[number];
+type StoredEvent = {
   readonly at: string;
-  readonly type: (typeof EVENT_TYPES)[number];
-  readonly role: string;
+  readonly type: EventType;
+  readonly by: string;
   readonly to?: string;
   readonly kind?: MessageKind;
   readonly text?: string;
@@ -53,30 +77,45 @@ export type TeamEvent = {
 const EventsSchema = Type.Array(Type.Object({
   at: TimestampSchema,
   type: Type.Union(EVENT_TYPES.map(type => Type.Literal(type))),
-  role: Type.String({ maxLength: 48 }),
-  to: Type.Optional(Type.String({ maxLength: 48 })),
+  by: EntityIdSchema,
+  to: Type.Optional(Type.String({ maxLength: 128 })),
   kind: Type.Optional(Type.Union(MESSAGE_KINDS.map(kind => Type.Literal(kind)))),
   text: Type.Optional(Type.String({ maxLength: 1200 })),
 }, { additionalProperties: false }), { maxItems: 300 });
-const assertEvents = (value: unknown): asserts value is TeamEvent[] => {
+const assertEvents = (value: unknown): asserts value is StoredEvent[] => {
   if (!Value.Check(EventsSchema, value)) throw new Error('Invalid team timeline.');
 };
 const EVENTS_KEEP = 300;
 const EVENTS_BYTES = 512 * 1024;
 
-/** A team with its members, as the panel lists every team on disk. */
-export type TeamOverview = { readonly team: string; readonly mates: readonly Teammate[]; readonly events: readonly TeamEvent[] };
+/** A timeline event as shown: IDs resolved to current names. */
+export type TeamEvent = {
+  readonly at: string;
+  readonly type: EventType;
+  readonly byId: string;
+  readonly role: string;
+  readonly toId?: string;
+  readonly to?: string;
+  readonly kind?: MessageKind;
+  readonly text?: string;
+};
+
+/** A team with its members and timeline, as the panel lists every team on disk. */
+export type TeamOverview = { readonly id: string; readonly name: string; readonly mates: readonly Teammate[]; readonly events: readonly TeamEvent[] };
 
 export type Incoming = { readonly from: string; readonly kind: MessageKind; readonly body: string };
-export type Joined = { readonly team: string; readonly role: string; readonly membership: Membership };
+export type Joined = { readonly teamId: string; readonly team: string; readonly role: string; readonly membership: Membership };
+/** A membership as saved in the session: IDs, plus the names for messages. */
+export type Saved = { readonly teamId: string; readonly memberId: string; readonly team: string; readonly role: string };
 
 /** A message that is not picked up within this window is dropped, never replayed later. */
 const MESSAGE_TTL_MS = 10 * 60 * 1000;
 export const MAX_BODY_BYTES = 4000;
+const newTeamId = (): string => `t-${randomUUID()}`;
 
 /**
- * One terminal's place in a named team: join under a role, see teammates and
- * what each is doing, send and receive messages. Holds no queue of work.
+ * One terminal's place in a team: join under a role, see teammates and what
+ * each is doing, send and receive messages. Holds no queue of work.
  */
 export class TeamSession {
   private readonly state: { get: () => Joined | undefined; set: (next: (current: Joined | undefined) => Joined | undefined) => void };
@@ -87,82 +126,171 @@ export class TeamSession {
   }
 
   current(): Joined | undefined { return this.state.get(); }
-
-  /** Teams on disk; a half-deleted directory is not a team. */
-  async teams(): Promise<string[]> {
-    const names = await this.runtime.teams.list().catch(() => [] as string[]);
-    const present = await Promise.all(names.map(async name => (await this.exists(name)) ? name : undefined));
-    return present.filter((name): name is string => name !== undefined);
+  saved(): Saved | undefined {
+    const joined = this.state.get();
+    return joined ? { teamId: joined.teamId, memberId: joined.membership.memberId, team: joined.team, role: joined.role } : undefined;
   }
 
-  private async exists(team: string): Promise<boolean> {
-    return this.runtime.teams.read(team).then(record => !!record, () => false);
+  private timestamp(): string { return new Date(this.now()).toISOString(); }
+  private async exists(teamId: string): Promise<boolean> {
+    return this.runtime.teams.read(teamId).then(record => !!record, () => false);
+  }
+  private profilePath(teamId: string): string { return join(this.runtime.paths.team(teamId), 'profile.json'); }
+
+  /** A team made before profiles is named by its ID, and its first member is admin. */
+  private async profile(teamId: string): Promise<Profile> {
+    const stored = await readJson(this.profilePath(teamId), assertProfile, 4096).catch(() => undefined);
+    if (stored) return stored;
+    const team = await this.runtime.teams.read(teamId).catch(() => undefined);
+    const first = await this.firstMember(teamId);
+    return { name: teamId, ...(first ? { adminId: first.memberId } : {}), createdAt: team?.createdAt ?? this.timestamp() };
+  }
+  private async firstMember(teamId: string): Promise<Member | undefined> {
+    const members = await this.runtime.teams.listMembers(teamId).catch(() => [] as Member[]);
+    return [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0];
   }
 
-  /** The admin is the role that created the team: the member who joined first. */
-  async adminOf(team: string): Promise<string | undefined> {
-    const members = await this.runtime.teams.listMembers(team).catch(() => []);
-    return [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0]?.alias;
+  /** Teams on disk by ID, with their names; a half-deleted directory is not a team. */
+  async teams(): Promise<{ readonly id: string; readonly name: string }[]> {
+    const ids = await this.runtime.teams.list().catch(() => [] as string[]);
+    const found = await Promise.all(ids.map(async id => (await this.exists(id)) ? { id, name: (await this.profile(id)).name } : undefined));
+    return found.filter((team): team is { id: string; name: string } => team !== undefined).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** The team ID for a name, if a team with that name exists. */
+  async findTeam(name: string): Promise<string | undefined> {
+    return (await this.teams()).find(team => team.name === name)?.id;
+  }
+
+  /** Creates a team with a new ID. Names are unique, so people can type them. */
+  private async createTeam(name: string): Promise<string> {
+    return withStorageLock(this.runtime.paths.lock('team-names'), async () => {
+      if (await this.findTeam(name)) throw new Error(`A team named ${name} already exists.`);
+      const id = newTeamId();
+      const at = this.timestamp();
+      await this.runtime.teams.create({ schemaVersion: 2, teamId: id, state: 'open', createdAt: at, updatedAt: at });
+      await replaceAtomicJson(this.profilePath(id), { name, createdAt: at } satisfies Profile, { maxBytes: 4096 });
+      return id;
+    });
   }
 
   private async requireAdmin(): Promise<Joined> {
     const joined = this.state.get();
     if (!joined) throw new Error('Not in a team.');
-    const admin = await this.adminOf(joined.team);
-    if (admin !== joined.role) throw new Error(`Only the admin of ${joined.team} (${admin ?? 'nobody'}) can do that.`);
+    const profile = await this.profile(joined.teamId);
+    if (profile.adminId !== joined.membership.memberId) {
+      const admin = (await this.teammates(joined.teamId)).find(mate => mate.admin)?.role;
+      throw new Error(`Only the admin of ${joined.team} (${admin ?? 'nobody'}) can do that.`);
+    }
     return joined;
+  }
+  /** For the command line: fails before asking the person to confirm something they may not do. */
+  async assertAdmin(): Promise<void> { await this.requireAdmin(); }
+
+  private async activeMember(teamId: string, role: string): Promise<Member> {
+    const members = await this.runtime.teams.listMembers(teamId);
+    const target = members.find(member => member.alias === role && member.state === 'active');
+    if (!target) throw new Error(`${role} is not an active member of this team.`);
+    return target;
+  }
+
+  /** The member shown under `role`: the active one, else the latest record with that name. */
+  private async memberNamed(teamId: string, role: string): Promise<Member> {
+    const members = (await this.runtime.teams.listMembers(teamId)).filter(member => member.alias === role);
+    const target = members.find(member => member.state === 'active') ?? [...members].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (!target) throw new Error(`No ${role} in this team.`);
+    return target;
   }
 
   /** Admin only: takes `role` out of the team. Its terminal notices within seconds. */
   async removeMember(role: string): Promise<void> {
     const joined = await this.requireAdmin();
     if (role === joined.role) throw new Error('You cannot remove yourself; leave or delete the team instead.');
-    const members = await this.runtime.teams.listMembers(joined.team);
-    const target = members.find(member => member.alias === role && member.state === 'active');
-    if (!target) throw new Error(`${role} is not an active member of ${joined.team}.`);
-    // Recorded first: the removed terminal reads the timeline to learn why it lost its role.
-    await this.record(joined.team, { type: 'removed', role: joined.role, to: role });
-    const timestamp = new Date(this.now()).toISOString();
-    await this.runtime.teams.updateMember(joined.team, target.memberId, target.generation, current => ({ ...current, state: 'left', leftAt: timestamp, updatedAt: timestamp }));
+    const target = await this.activeMember(joined.teamId, role);
+    // Recorded first: the removed terminal reads the timeline to learn why it lost its place.
+    await this.record(joined.teamId, { type: 'removed', by: joined.membership.memberId, to: target.memberId });
+    const at = this.timestamp();
+    await this.runtime.teams.updateMember(joined.teamId, target.memberId, target.generation, current => ({ ...current, state: 'left', leftAt: at, updatedAt: at }));
+  }
+
+  /** Admin, or a member renaming itself: gives `role` a new name. The member keeps its ID, messages and trace. */
+  async renameMember(role: string, next: string): Promise<void> {
+    const joined = this.state.get();
+    if (!joined) throw new Error('Not in a team.');
+    assertName(next, 'Role');
+    if (role !== joined.role) await this.requireAdmin();
+    // Offline members can be renamed too; they rejoin by ID under the new name.
+    const target = await this.memberNamed(joined.teamId, role);
+    await this.runtime.teams.updateMember(joined.teamId, target.memberId, target.generation, current => ({ ...current, alias: next, updatedAt: this.timestamp() }))
+      .catch(error => {
+        if ((error as { code?: string }).code === 'ALREADY_EXISTS') throw new Error(`${next} is already a role in ${joined.team}.`);
+        throw error;
+      });
+    if (target.memberId === joined.membership.memberId) this.state.set(current => current ? { ...current, role: next } : current);
+    await this.record(joined.teamId, { type: 'renamed', by: joined.membership.memberId, to: target.memberId, text: `${role} → ${next}` });
+  }
+
+  /** Admin only: gives the team a new name. Its ID, members and trace stay. */
+  async renameTeam(next: string): Promise<void> {
+    const joined = await this.requireAdmin();
+    assertName(next, 'Team');
+    await withStorageLock(this.runtime.paths.lock('team-names'), async () => {
+      const other = await this.findTeam(next);
+      if (other && other !== joined.teamId) throw new Error(`A team named ${next} already exists.`);
+      const profile = await this.profile(joined.teamId);
+      await replaceAtomicJson(this.profilePath(joined.teamId), { ...profile, name: next }, { maxBytes: 4096 });
+    });
+    this.state.set(current => current ? { ...current, team: next } : current);
+    await this.record(joined.teamId, { type: 'renamed', by: joined.membership.memberId, text: `team ${joined.team} → ${next}` });
   }
 
   /** Admin only: deletes the team, its members, messages and timeline. Every terminal in it notices within seconds. */
   async deleteTeam(): Promise<string> {
     const joined = await this.requireAdmin();
     this.state.set(() => undefined);
-    await withStorageLock(this.runtime.paths.teamLock(joined.team), () => rm(this.runtime.paths.team(joined.team), { recursive: true, force: true }));
+    await withStorageLock(this.runtime.paths.teamLock(joined.teamId), () => rm(this.runtime.paths.team(joined.teamId), { recursive: true, force: true }));
     return joined.team;
   }
 
-  /** After losing membership: was the team deleted, was this role removed, or did another terminal take it? */
-  async fate(team: string, role: string): Promise<Fate> {
-    if (!await this.exists(team)) return { reason: 'deleted' };
-    const removal = (await this.events(team)).reverse().find(event => event.type === 'removed' && event.to === role);
-    const rejoined = (await this.events(team)).reverse().find(event => event.type === 'joined' && event.role === role);
-    if (removal && (!rejoined || removal.at >= rejoined.at)) return { reason: 'removed', by: removal.role };
+  /** After losing membership: was the team deleted, was this member removed, or did another terminal take it? */
+  async fate(teamId: string, memberId: string): Promise<Fate> {
+    if (!await this.exists(teamId)) return { reason: 'deleted' };
+    const events = [...await this.stored(teamId)].reverse();
+    const removal = events.find(event => event.type === 'removed' && event.to === memberId);
+    const rejoined = events.find(event => event.type === 'joined' && event.by === memberId);
+    if (removal && (!rejoined || removal.at >= rejoined.at)) {
+      const names = await this.names(teamId);
+      return { reason: 'removed', by: names.get(removal.by) ?? 'the admin' };
+    }
     return { reason: 'replaced' };
   }
 
-  /** Joins `team` as `role`, creating the team on first use. Leaves any team joined before. */
-  async join(input: { readonly team: string; readonly role: string; readonly sessionId: string; readonly cwd: string }): Promise<{ readonly created: boolean }> {
-    const team = assertTeamId(input.team);
-    const role = assertTeamId(input.role);
+  /**
+   * Joins the team named `team` as `role`, creating it on first use. Leaves any
+   * team joined before. With `saved`, rejoins that exact team and member by ID.
+   */
+  async join(input: { readonly team: string; readonly role: string; readonly sessionId: string; readonly cwd: string; readonly saved?: Saved }): Promise<{ readonly created: boolean }> {
     await this.leave();
-    const timestamp = new Date(this.now()).toISOString();
-    const created = await this.runtime.teams.create({ schemaVersion: 2, teamId: team, state: 'open', createdAt: timestamp, updatedAt: timestamp })
-      .then(() => true, error => {
-        if ((error as { code?: string }).code === 'ALREADY_EXISTS') return false;
-        throw error;
-      });
-    const membership = await this.runtime.memberships.join({ teamId: team, alias: role, sessionId: input.sessionId, cwd: input.cwd, kind: 'external' })
+    const found = input.saved && await this.exists(input.saved.teamId) ? input.saved.teamId : await this.findTeam(assertName(input.team, 'Team'));
+    if (!found && input.saved) throw new Error(`Team ${input.saved.team} no longer exists.`);
+    const teamId = found ?? await this.createTeam(input.team);
+    // Rejoining by ID keeps the name the member has now, even if it was renamed while away.
+    const current = input.saved ? (await this.runtime.teams.readMember(teamId, input.saved.memberId).catch(() => undefined)) : undefined;
+    const role = current?.alias ?? assertName(input.role, 'Role');
+    const membership = await this.runtime.memberships.join({ teamId, alias: role, sessionId: input.sessionId, cwd: input.cwd, kind: 'external', ...(current ? { memberId: current.memberId } : {}) })
       .catch(error => {
-        if ((error as { code?: string }).code === 'ALREADY_EXISTS') throw new Error(`"${role}" is already online in team ${team}. Pick another role.`);
+        if ((error as { code?: string }).code === 'ALREADY_EXISTS') throw new Error(`"${role}" is already online in team ${input.team}. Pick another role.`);
         throw error;
       });
-    this.state.set(() => ({ team, role, membership }));
-    await this.record(team, { type: 'joined', role, text: input.cwd });
-    await this.setActivity({ state: 'idle', since: timestamp });
-    return { created };
+    if (!found) {
+      const profile = await this.profile(teamId);
+      await replaceAtomicJson(this.profilePath(teamId), { ...profile, adminId: membership.memberId }, { maxBytes: 4096 });
+    }
+    const name = (await this.profile(teamId)).name;
+    this.state.set(() => ({ teamId, team: name, role, membership }));
+    await this.record(teamId, { type: 'joined', by: membership.memberId, text: input.cwd });
+    await this.setActivity({ state: 'idle', since: this.timestamp() });
+    return { created: !found };
   }
 
   async leave(): Promise<Joined | undefined> {
@@ -170,56 +298,73 @@ export class TeamSession {
     if (!joined) return undefined;
     this.state.set(() => undefined);
     await this.runtime.memberships.leave(joined.membership).catch(() => {});
-    await this.record(joined.team, { type: 'left', role: joined.role });
+    await this.record(joined.teamId, { type: 'left', by: joined.membership.memberId });
     return joined;
   }
 
-  /** Renews presence. When this terminal is no longer a member, returns the team and role it lost. */
-  async heartbeat(): Promise<{ readonly team: string; readonly role: string } | undefined> {
+  /**
+   * Renews presence and picks up renames. When this terminal is no longer a
+   * member, returns what it lost; when its names changed, returns them.
+   */
+  async heartbeat(): Promise<{ readonly lost?: Saved; readonly renamed?: { readonly team: string; readonly role: string } }> {
     const joined = this.state.get();
-    if (!joined) return undefined;
+    if (!joined) return {};
     const alive = await this.runtime.memberships.heartbeat(joined.membership).then(() => true, () => false);
-    if (alive) return undefined;
-    this.state.set(current => current === joined ? undefined : current);
-    return { team: joined.team, role: joined.role };
+    if (!alive) {
+      this.state.set(current => current === joined ? undefined : current);
+      return { lost: { teamId: joined.teamId, memberId: joined.membership.memberId, team: joined.team, role: joined.role } };
+    }
+    const member = await this.runtime.teams.readMember(joined.teamId, joined.membership.memberId).catch(() => undefined);
+    const team = (await this.profile(joined.teamId)).name;
+    const role = member?.alias ?? joined.role;
+    if (team === joined.team && role === joined.role) return {};
+    this.state.set(current => current === joined ? { ...current, team, role } : current);
+    return { renamed: { team, role } };
   }
 
-  private activityPath(team: string, memberId: string): string {
-    return join(this.runtime.paths.team(team), 'activity', `${memberId}.json`);
+  private activityPath(teamId: string, memberId: string): string {
+    return join(this.runtime.paths.team(teamId), 'activity', `${memberId}.json`);
   }
 
   async setActivity(activity: Activity): Promise<void> {
     const joined = this.state.get();
     // A deleted team must not be brought back as a half directory.
-    if (!joined || !await this.exists(joined.team)) return;
-    const directory = join(this.runtime.paths.team(joined.team), 'activity');
-    await ensurePrivateDirectory(directory);
+    if (!joined || !await this.exists(joined.teamId)) return;
+    await ensurePrivateDirectory(join(this.runtime.paths.team(joined.teamId), 'activity'));
     const record = { ...activity, ...(activity.focus ? { focus: clean(activity.focus, 512) } : {}) };
-    const path = this.activityPath(joined.team, joined.membership.memberId);
+    const path = this.activityPath(joined.teamId, joined.membership.memberId);
     const previous = await readJson(path, assertActivity, 2048).catch(() => undefined);
     await replaceAtomicJson(path, record, { maxBytes: 2048 });
     // The timeline keeps changes only: a new state, or new work while working. Joining already says idle.
     const changed = previous ? previous.state !== record.state : record.state === 'working';
     if (changed || (record.state === 'working' && previous?.focus !== record.focus)) {
-      await this.record(joined.team, { type: record.state, role: joined.role, ...(record.state === 'working' && record.focus ? { text: record.focus } : {}) });
+      await this.record(joined.teamId, { type: record.state, by: joined.membership.memberId, ...(record.state === 'working' && record.focus ? { text: record.focus } : {}) });
     }
   }
 
-  /** Everyone in the joined team (or `team`), newest record per role, with live activity. */
-  async teammates(team = this.state.get()?.team): Promise<Teammate[]> {
-    if (!team) return [];
+  private async names(teamId: string): Promise<Map<string, string>> {
+    const members = await this.runtime.teams.listMembers(teamId).catch(() => [] as Member[]);
+    return new Map(members.map(member => [member.memberId, member.alias]));
+  }
+
+  /** Everyone in the joined team (or `teamId`), with live activity. */
+  async teammates(teamId = this.state.get()?.teamId): Promise<Teammate[]> {
+    if (!teamId) return [];
     const self = this.state.get();
-    const members = await this.runtime.teams.listMembers(team);
-    const admin = [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0]?.alias;
-    const latest = [...members]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    const members = await this.runtime.teams.listMembers(teamId);
+    const { adminId } = await this.profile(teamId);
+    // An active member wins over an old record that once had the same name.
+    const shown = [...members]
+      .sort((a, b) => Number(b.state === 'active') - Number(a.state === 'active') || b.updatedAt.localeCompare(a.updatedAt))
       .filter((member, index, all) => all.findIndex(other => other.alias === member.alias) === index);
-    const list = await Promise.all(latest.map(async member => {
+    const list = await Promise.all(shown.map(async member => {
       const online = await this.runtime.presence.online(member);
-      const activity = online
-        ? await readJson(this.activityPath(team, member.memberId), assertActivity, 2048).catch(() => undefined)
-        : undefined;
-      return { role: member.alias, online, cwd: member.cwd, self: self?.team === team && self.membership.memberId === member.memberId, admin: member.alias === admin, ...(activity ? { activity } : {}) };
+      const activity = online ? await readJson(this.activityPath(teamId, member.memberId), assertActivity, 2048).catch(() => undefined) : undefined;
+      return {
+        id: member.memberId, role: member.alias, online, cwd: member.cwd,
+        self: self?.teamId === teamId && self.membership.memberId === member.memberId,
+        admin: member.memberId === adminId, ...(activity ? { activity } : {}),
+      };
     }));
     return list.sort((a, b) => Number(b.online) - Number(a.online) || a.role.localeCompare(b.role));
   }
@@ -230,43 +375,51 @@ export class TeamSession {
     if (!joined) throw new Error('Not in a team. Use /team join <team> <role>.');
     if (to === joined.role) throw new Error('That is you. Message another role.');
     bounded(body, MAX_BODY_BYTES, 'Message');
-    const target = (await this.teammates(joined.team)).find(mate => mate.role === to);
+    const target = (await this.teammates(joined.teamId)).find(mate => mate.role === to);
     const refusal = !target ? `No "${to}" in team ${joined.team}.`
       : !target.online ? `${to} is offline, so nothing was sent. Do not wait for them: carry on with your own work.` : undefined;
     if (refusal) {
-      await this.record(joined.team, { type: 'refused', role: joined.role, to, kind, text: target ? 'offline' : 'no such role' });
+      await this.record(joined.teamId, { type: 'refused', by: joined.membership.memberId, to: target?.id ?? to, kind, text: target ? 'offline' : 'no such role' });
       throw new Error(refusal);
     }
     await this.runtime.requests.send(joined.membership, { to, kind, body: clean(body, MAX_BODY_BYTES), ttlMs: MESSAGE_TTL_MS });
-    await this.record(joined.team, { type: 'message', role: joined.role, to, kind, text: body });
+    await this.record(joined.teamId, { type: 'message', by: joined.membership.memberId, to: target!.id, kind, text: body });
   }
 
-  private eventsPath(team: string): string { return join(this.runtime.paths.team(team), 'events.json'); }
+  private eventsPath(teamId: string): string { return join(this.runtime.paths.team(teamId), 'events.json'); }
 
   /** Appends to the team timeline. Best-effort: tracing never blocks the work it traces. */
-  private async record(team: string, event: Omit<TeamEvent, 'at'>): Promise<void> {
-    const entry: TeamEvent = { ...event, at: new Date(this.now()).toISOString(), ...(event.text ? { text: clean(event.text, 1200) } : {}) };
-    await withStorageLock(this.runtime.paths.lock(`events-${team}`), async () => {
-      if (!await this.exists(team)) return;
-      const events = await this.events(team);
-      await replaceAtomicJson(this.eventsPath(team), [...events, entry].slice(-EVENTS_KEEP), { maxBytes: EVENTS_BYTES });
+  private async record(teamId: string, event: Omit<StoredEvent, 'at'>): Promise<void> {
+    const entry: StoredEvent = { ...event, at: this.timestamp(), ...(event.text ? { text: clean(event.text, 1200) } : {}) };
+    await withStorageLock(this.runtime.paths.lock(`events-${teamId}`), async () => {
+      if (!await this.exists(teamId)) return;
+      const events = await this.stored(teamId);
+      await replaceAtomicJson(this.eventsPath(teamId), [...events, entry].slice(-EVENTS_KEEP), { maxBytes: EVENTS_BYTES });
     }).catch(() => {});
   }
+  private async stored(teamId: string): Promise<StoredEvent[]> {
+    return await readJson(this.eventsPath(teamId), assertEvents, EVENTS_BYTES).catch(() => undefined) ?? [];
+  }
 
-  /** The team timeline (the joined team by default), oldest first. */
-  async events(team = this.state.get()?.team): Promise<TeamEvent[]> {
-    if (!team) return [];
-    return await readJson(this.eventsPath(team), assertEvents, EVENTS_BYTES).catch(() => undefined) ?? [];
+  /** The timeline of the joined team (or `teamId`), oldest first, with current names. */
+  async events(teamId = this.state.get()?.teamId): Promise<TeamEvent[]> {
+    if (!teamId) return [];
+    const [events, names] = await Promise.all([this.stored(teamId), this.names(teamId)]);
+    return events.map(event => ({
+      at: event.at, type: event.type, byId: event.by, role: names.get(event.by) ?? 'someone',
+      ...(event.to ? { toId: event.to, to: names.get(event.to) ?? event.to } : {}),
+      ...(event.kind ? { kind: event.kind } : {}), ...(event.text ? { text: event.text } : {}),
+    }));
   }
 
   /** Every team on disk with its members and timeline, the joined one first. */
   async overview(): Promise<TeamOverview[]> {
-    const joined = this.state.get()?.team;
+    const joined = this.state.get()?.teamId;
     const teams = await this.teams();
     const all = await Promise.all(teams.map(async team => ({
-      team, mates: await this.teammates(team).catch(() => []), events: await this.events(team),
+      id: team.id, name: team.name, mates: await this.teammates(team.id).catch(() => []), events: await this.events(team.id),
     })));
-    return all.sort((a, b) => Number(b.team === joined) - Number(a.team === joined) || a.team.localeCompare(b.team));
+    return all.sort((a, b) => Number(b.id === joined) - Number(a.id === joined) || a.name.localeCompare(b.name));
   }
 
   /** Takes every message waiting for this terminal, each exactly once. */

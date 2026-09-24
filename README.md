@@ -34,8 +34,10 @@ In another (any folder, repo or worktree: the team is the name, not the path):
 | Command | Meaning |
 | --- | --- |
 | `/team join <team> <role>` | Join `team` as `role`; creates the team if it does not exist. Leaves any team joined before. |
-| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. As admin, `x` removes the selected member and `d` deletes the team. Every one of these asks for confirmation. |
+| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. `r` renames the selected team (admin) or member (yourself, or anyone as admin). As admin, `x` removes the selected member and `d` deletes the team. Every removal, deletion, departure and rename asks for confirmation. |
 | `/team send <role> <message>` | Send your own message to a teammate now. |
+| `/team rename <new-name>` | Admin only: rename the team, after a confirmation. |
+| `/team rename-role <role> <new-role>` | Rename your own role, or any role as admin, after a confirmation. |
 | `/team leave` | Leave the team, after a confirmation. |
 | `/team remove <role>` | Admin only: take a member out of the team, after a confirmation. |
 | `/team delete` | Admin only: delete the team for everyone, after a confirmation. |
@@ -61,9 +63,13 @@ Earlier versions had requests that waited for a correlated result, with a queue 
 - **Visible activity and full traceability.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). Every team keeps a timeline with exact times: joins and leaves, who started working on what, who went idle, every message (from → to, kind, text) and every send refused because the recipient was offline. The `/team` panel shows all of it, so a stalled terminal is obvious.
 - **No ping-pong.** After 6 turns opened by teammates without you typing, messages still show up but stop opening turns, until you type something.
 
+## Identity
+
+Everything is stored by ID, never by name. A team is `t-<uuid>`, and its name lives in the team's profile. A member is a UUID, and its role is a label. The timeline, the admin and the membership saved in each session all refer to IDs. So renaming a team or a role keeps its members, messages and history. A renamed terminal stays connected and is told its new name, and a session that reloads rejoins the same member, even if it was renamed while away. Team names are unique, so they can be typed; after a team is renamed, its old name is free again.
+
 ## Admin
 
-The role that creates a team is its admin, marked `· admin` in the panel. While you are in the team as that role, you can remove members and delete the team. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
+The role that creates a team is its admin, marked with a crown (`♛ backend`) in the panel. While you are in the team as that member, you can rename the team, rename or remove members, and delete the team. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
 
 ## Lifecycle
 
