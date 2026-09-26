@@ -1,3 +1,19 @@
+## [0.8.0](https://github.com/prjct-app/pi-team/compare/v0.7.0...v0.8.0) (2026-09-26)
+
+### Features
+
+* /team panel lists every team and member, with a full timeline ([a6e3d3b](https://github.com/prjct-app/pi-team/commit/a6e3d3b88331509849f0e43e23e090b25615a009))
+* confirm before leaving; the team admin removes members and deletes the team ([e2e5300](https://github.com/prjct-app/pi-team/commit/e2e5300fef4accb7b7b031aee6d49f4395592c76))
+* IDs everywhere, renames, and a confirmation for every destructive action ([b53677b](https://github.com/prjct-app/pi-team/commit/b53677b5411a18fbb0680b2c641e2900791ea535))
+* manual teams across terminals; messages never queue ([22dddf9](https://github.com/prjct-app/pi-team/commit/22dddf947b1089847bc30f2ecf811ee6c1f8b506))
+
+### Bug Fixes
+
+* mark the admin by shape, not emoji: diamonds for the admin, dots for members, squares for teams ([486ea49](https://github.com/prjct-app/pi-team/commit/486ea4990f32fc2d5236a32902e3489814f2e521))
+* messaging a member from the panel is always findable (m or Enter) and says why when blocked ([b82ea90](https://github.com/prjct-app/pi-team/commit/b82ea9082b1744036524a84329b562b29e825627))
+* say who the agent is with a persisted message, not the system prompt ([d492434](https://github.com/prjct-app/pi-team/commit/d49243447491acfcab6e7d13dcb6ca057738d2f3))
+* the admin crown is the 👑 emoji, visible in any terminal font ([c0edc1f](https://github.com/prjct-app/pi-team/commit/c0edc1fe03a569e9b2d48bd5c5a47a6087720bf8))
+
 ## [0.7.0](https://github.com/prjct-app/pi-team/compare/v0.6.1...v0.7.0) (2026-09-22)
 
 ### Features
