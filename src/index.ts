@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
-import { ENGLISH_RULE, SYMBOL, brand, cheapComplete, openPanel, row, toEnglishInstructions, type Complete } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, toEnglishInstructions, type Complete } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
@@ -23,6 +23,8 @@ export type InstallTeamOptions = {
 
 const ENTRY = 'team-membership';
 const TOOLS = ['team_peers', 'team_message'];
+const IDENTITY = 'team-identity';
+const LEFT = 'You are no longer in a team: team_peers and team_message are gone, and earlier team context no longer applies.';
 /** Turns teammates may open in a row before the person says anything. Stops two agents ping-ponging forever. */
 export const AUTO_TURN_LIMIT = 6;
 const HEARTBEAT_MS = 5_000;
@@ -145,13 +147,13 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   };
   const deleteTeam = async (): Promise<string> => {
     const team = await session.deleteTeam();
-    dropMembership();
+    dropMembership(); announce(LEFT);
     pi.appendEntry<Membership>(ENTRY, { left: true });
     return `Deleted team ${team}.`;
   };
   const leaveTeam = async (): Promise<string> => {
     const left = await session.leave();
-    dropMembership();
+    dropMembership(); if (left) announce(LEFT);
     if (left) pi.appendEntry<Membership>(ENTRY, { left: true });
     return left ? `Left team ${left.team}.` : 'Not in a team.';
   };
@@ -159,11 +161,28 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved): Promise<boolean> => {
     const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}) });
     registerTools(); toolsOn(true); showMembership();
+    announce(identityText(team, role), ctx);
     store.set(slot => ({ ...slot, autoTurns: 0, pausedNotice: false, beatAt: now() }));
     await refreshCompletions();
     return created;
   };
   const dropMembership = (): void => { toolsOn(false); showMembership(); };
+  /**
+   * Who you are, as one persisted context message per change. A per-turn
+   * system-prompt line vanished on automated turns (teammate messages,
+   * subagent reports): the model lost its role and the cached prefix flipped.
+   */
+  const identity = { last: undefined as string | undefined };
+  const announce = (text: string, ctx: ExtensionContext | undefined = store.get().ctx): void => {
+    const manager = ctx?.sessionManager as { getBranch?: () => unknown[]; getEntries?: () => unknown[] };
+    const entries = (manager?.getBranch?.() ?? manager?.getEntries?.() ?? []) as { type?: string; customType?: string; content?: unknown }[];
+    const journaled = [...entries].reverse().find(entry => entry.type === 'custom_message' && entry.customType === IDENTITY)?.content;
+    if ((identity.last ?? journaled) === text) return;
+    identity.last = text;
+    pi.sendMessage({ customType: IDENTITY, content: text, display: false }, { triggerTurn: false, deliverAs: 'nextTurn' });
+  };
+  const identityText = (team: string, role: string): string =>
+    `You are "${role}" in team "${team}", one of several independent Pi terminals. Do your own work with your own tools and subagents. Teammates are reachable with team_peers and team_message; never wait on them.`;
   /** Join, remember it in the session, and say so. */
   const remember = (): void => { const saved = session.saved(); if (saved) pi.appendEntry<Membership>(ENTRY, saved); };
   const enter = async (ctx: ExtensionContext, team: string, role: string): Promise<string> => {
@@ -172,7 +191,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
   };
   const sendFromPerson = async (ctx: ExtensionContext, to: string, text: string): Promise<void> => {
-    const body = await toEnglishInstructions(text, options.complete ?? cheapComplete(ctx));
+    const body = await toEnglishInstructions(text, options.complete ?? sessionComplete(ctx));
     await session.send(to, 'info', `From the person at this terminal: ${body}`);
   };
 
@@ -181,6 +200,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   const renameTeam = async (next: string): Promise<string> => {
     const before = session.current()?.team;
     await session.renameTeam(next); showMembership(); remember();
+    const role = session.current()?.role;
+    if (role) announce(identityText(next, role));
     return `Renamed team ${before} to ${next}.`;
   };
   const renameMember = async (role: string, next: string): Promise<string> => {
@@ -386,14 +407,14 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     }
   });
 
-  // Who you are rides along only while you are in a team: one short, stable line.
+  // Tracks what this terminal is working on; the prompt itself is never edited.
   pi.on('before_agent_start', event => {
     const joined = session.current();
     if (!joined) return undefined;
     const prompt = event.prompt?.trim();
     if (prompt) store.set(slot => ({ ...slot, focus: prompt }));
     void queue(() => session.setActivity({ state: 'working', since: new Date(now()).toISOString(), ...(store.get().focus ? { focus: store.get().focus } : {}) })).catch(() => {});
-    return { systemPrompt: `${event.systemPrompt}\n\nYou are "${joined.role}" in team "${joined.team}", one of several independent Pi terminals. Do your own work with your own tools and subagents. Teammates are reachable with team_peers and team_message; never wait on them.` };
+    return undefined;
   });
   pi.on('agent_end', () => {
     if (!session.current()) return;
