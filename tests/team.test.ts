@@ -12,7 +12,7 @@ type Sent = { readonly content: string; readonly options: { readonly triggerTurn
 /** One simulated Pi terminal over a shared store. */
 function terminal(root: string, sessionId: string, entries: unknown[] = []) {
   const handlers = new Map<string, any>(); const commands = new Map<string, any>(); const tools = new Map<string, any>();
-  const active: string[] = ['read', 'bash']; const notices: string[] = []; const sent: Sent[] = []; const status = { text: undefined as string | undefined };
+  const active: string[] = ['read', 'bash']; const notices: string[] = []; const sent: Sent[] = []; const identities: Sent[] = []; const status = { text: undefined as string | undefined };
   const idle = { value: true };
   const confirms = { answer: true };
   const ctx = {
@@ -24,13 +24,13 @@ function terminal(root: string, sessionId: string, entries: unknown[] = []) {
     on: (n: string, h: any) => handlers.set(n, h), registerCommand: (n: string, c: any) => commands.set(n, c),
     registerTool: (t: any) => { tools.set(t.name, t); active.push(t.name); }, getActiveTools: () => [...active],
     setActiveTools: (names: string[]) => active.splice(0, active.length, ...names),
-    sendMessage: (m: any, options: any) => sent.push({ content: m.content, options }),
+    sendMessage: (m: any, options: any) => (m.customType === 'team-identity' ? identities : sent).push({ content: m.content, options }),
     appendEntry: (customType: string, data: unknown) => entries.push({ type: 'custom', customType, data }),
     registerMessageRenderer() {},
   } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 10, heartbeatMs: 100, complete: async (_s, user) => user });
   return {
-    active, notices, sent, status, idle, entries, tools, root, confirms,
+    active, notices, sent, identities, status, idle, entries, tools, root, confirms,
     command: (s: string) => commands.get('team').handler(s, ctx),
     commandWith: (s: string, extra: { mode?: string; ui?: Record<string, unknown> }) =>
       commands.get('team').handler(s, { ...ctx, ...extra, ui: { ...ctx.ui, setEditorText() {}, ...extra.ui } }),
@@ -92,8 +92,11 @@ test('two terminals join by name, see each other working, and a message arrives 
   await b.command('join shop reviewer');
   assert.match(b.last(), /^Joined team shop as reviewer/);
 
-  const prompt = await a.emit('before_agent_start', { prompt: 'Implement the login endpoint', systemPrompt: 'base' });
-  assert.match(prompt.systemPrompt, /You are "backend" in team "shop"/);
+  // The role is one persisted message per change, never a per-turn system-prompt edit.
+  assert.equal(await a.emit('before_agent_start', { prompt: 'Implement the login endpoint', systemPrompt: 'base' }), undefined);
+  const identity = a.identities.filter(m => /You are "backend" in team "shop"/.test(String(m.content)));
+  assert.equal(identity.length, 1);
+  assert.deepEqual(identity[0]!.options, { triggerTurn: false, deliverAs: 'nextTurn' });
   // Activity is written by backend's own terminal; reviewer sees it once it lands.
   const seen = { text: '' };
   await until(() => /◆ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
@@ -408,4 +411,16 @@ test('reload rejoins by ID, even after the role was renamed while away', async (
   await admin.command('rename-role backend api');
   const again = await make('s-a', entries);
   assert.equal(again.status.text, 'team shop · api');
+});
+
+test('the role reaches the model once per change and leaving says so', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-id');
+  await a.command('join shop backend');
+  await a.emit('before_agent_start', { prompt: 'one', systemPrompt: 'base' });
+  await a.emit('before_agent_start', { prompt: 'two', systemPrompt: 'base' });
+  assert.equal(a.identities.length, 1, 'turns do not repeat it');
+  await a.command('leave');
+  assert.match(a.identities.at(-1)!.content, /no longer in a team/);
+  assert.ok(a.identities.every(m => m.options.triggerTurn === false && m.options.deliverAs === 'nextTurn'));
 });

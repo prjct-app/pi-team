@@ -47,12 +47,12 @@ Team and role names are 1–48 lowercase letters, digits or hyphens, starting wi
 
 ## Agent tools
 
-While joined, the agent gets two tools and one short line in its system prompt that says who it is:
+While joined, the agent gets two tools and one context message that says who it is. The message is written once per change (join, rename, leave), so it survives automated turns and never edits the system prompt:
 
 - `team_peers` lists the other terminals with their live activity.
 - `team_message { to, kind: info | question | handoff, body }` sends a message.
 
-The tool descriptions tell the agent never to wait on a teammate, to keep working and to use its own tools and subagents for anything it needs. When you leave, both tools and the line go away.
+The tool descriptions tell the agent never to wait on a teammate, to keep working and to use its own tools and subagents for anything it needs. When you leave, both tools go away and a last message says the team context no longer applies.
 
 ## Why nothing queues
 
