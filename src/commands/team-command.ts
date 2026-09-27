@@ -58,11 +58,11 @@ export function commandCompletions(known: { readonly teams: () => readonly strin
   const teams = (): CommandOption[] => known.teams().map(team => ({ value: team, description: `join team ${team}` }));
   const roles = (): CommandOption[] => known.roles().map(role => ({ value: role, description: `message ${role}` }));
   return completer([
-    { value: 'join', description: 'join a team under a role (creates the team)', options: teams },
+    { value: 'join', description: 'join a team under a role, or take over an offline role (asks first)', options: teams },
     { value: 'send', description: 'message a teammate now; never queued', options: roles },
     { value: 'status', description: 'who is online and what each is doing' },
     { value: 'leave', description: 'leave the team (asks first)' },
-    { value: 'remove', description: 'admin: take a member out of the team (asks first)', options: roles },
+    { value: 'remove', description: 'remove a role: any offline one, or an online one as admin (asks first)', options: roles },
     { value: 'delete', description: 'admin: delete the team you created (asks first)' },
     { value: 'rename', description: 'admin: rename the team (asks first)' },
     { value: 'rename-role', description: 'rename your role, or any role as admin (asks first)', options: roles },

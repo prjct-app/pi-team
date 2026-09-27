@@ -79,6 +79,16 @@ export class PresenceService {
     );
   }
 
+  /** The same owner while its lease holds; a new lease once it lapsed; fenced when someone else holds it. */
+  async reclaim(owner: PresenceOwner): Promise<PresenceOwner> {
+    const lease = await this.leases.read(owner.teamId, this.leaseId(owner.memberId));
+    if (lease && !leaseExpired(lease, this.now())) {
+      if (lease.holderId === this.holderId(owner.memberId, owner.memberGeneration) && sameLeaseOwner(lease, owner.leaseToken, owner.leaseGeneration)) return owner;
+      throw Object.assign(new Error('Membership ownership has been fenced.'), { code: 'FENCED' });
+    }
+    return this.acquire(owner.teamId, owner.memberId, owner.memberGeneration);
+  }
+
   async release(owner: PresenceOwner): Promise<void> {
     await this.leases.release(
       owner.teamId,

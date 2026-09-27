@@ -27,23 +27,23 @@ In another (any folder, repo or worktree: the team is the name, not the path):
 /team send backend Please check the login error codes
 ```
 
-`join` creates the team the first time. The status line shows `team shop · reviewer`.
+`join` creates the team the first time. The mode line right above the editor shows `team shop · reviewer` while this terminal is in a team.
 
 ## Commands
 
 | Command | Meaning |
 | --- | --- |
-| `/team join <team> <role>` | Join `team` as `role`; creates the team if it does not exist. Leaves any team joined before. |
-| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. `r` renames the selected team (admin) or member (yourself, or anyone as admin). As admin, `x` removes the selected member and `d` deletes the team. Every removal, deletion, departure and rename asks for confirmation. |
+| `/team join <team> <role>` | Join `team` as `role` after a confirmation; creates the team if it does not exist. A role another Pi session holds while it is offline is taken over (the confirmation says so); a role online in another terminal is refused. Leaves any team joined before. |
+| `/team` or `/team status` | Opens the team panel: every team with its members under it (● working 3m, ○ idle, offline). Detail shows what each member is on and the team's full timeline. `n` creates a team, `a` or Enter joins the selected one, `a` on an offline role joins as that role (taking it over), `m` or Enter on a member messages it (or says why it cannot: not in that team, offline, yourself), `l` leaves. `r` renames the selected team (admin) or member (yourself, or anyone as admin). `x` removes the selected role: anyone can clear an offline role (the admin's too), the admin also an online one. `d` deletes the selected team: its admin from inside, or anyone once nobody in it is online. Every join, takeover, removal, deletion, departure and rename asks for confirmation. |
 | `/team send <role> <message>` | Send your own message to a teammate now. |
 | `/team rename <new-name>` | Admin only: rename the team, after a confirmation. |
 | `/team rename-role <role> <new-role>` | Rename your own role, or any role as admin, after a confirmation. |
 | `/team leave` | Leave the team, after a confirmation. |
-| `/team remove <role>` | Admin only: take a member out of the team, after a confirmation. |
+| `/team remove <role>` | Remove a role from the team, after a confirmation: any offline role, or an online one as admin. |
 | `/team delete` | Admin only: delete the team for everyone, after a confirmation. |
 | `/team help` | Usage. |
 
-Team and role names are 1–48 lowercase letters, digits or hyphens, starting with a letter. A role that is already online in another terminal is refused. Completion suggests existing teams after `join` and online roles after `send`.
+Team and role names are 1–48 lowercase letters, digits or hyphens, starting with a letter. A role belongs to the Pi session that took it. Another session gets it only by taking it over, with a confirmation, while its owner is offline. Completion suggests existing teams after `join` and online roles after `send`.
 
 ## Agent tools
 
@@ -69,11 +69,11 @@ Everything is stored by ID, never by name. A team is `t-<uuid>`, and its name li
 
 ## Admin
 
-The role that creates a team is its admin, marked by shape rather than a label: a diamond where members have a dot (◆ working, ◇ idle or offline; members show ● and ○). Teams are squares: ■ with someone online, □ empty. While you are in the team as that member, you can rename the team, rename or remove members, and delete the team. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
+The role that creates a team is its admin, marked by shape rather than a label: a diamond where members have a dot (◆ working, ◇ idle or offline; members show ● and ○). Teams are squares: ■ with someone online, □ empty. While you are in the team as that member, you can rename the team, rename members, remove online members, and delete the team. Offline roles can be removed by anyone, and a team nobody is online in can be deleted by anyone from the panel. The admin role moves with a takeover; once it leaves or is removed, the longest-standing member becomes admin. A removed terminal leaves the team within seconds and sees "You were removed from shop by backend". When a team is deleted, every terminal in it sees "Team shop was deleted". Removals appear in the timeline. This is team housekeeping, not security: every terminal runs as the same OS user.
 
 ## Lifecycle
 
-Membership is saved in the session. After `/reload` or a resume, the terminal takes its role back. On shutdown the role is released immediately, so another terminal can take it. `/new` and `/fork` start outside any team, and an explicit `/team leave` is remembered.
+Membership is saved in the session, and the role stays bound to that session until it runs `/team leave`, is removed, or is taken over while offline. Closing Pi, `/reload`, `/new` and a sleeping machine only take the terminal offline: after `/reload` or a resume, the same session takes its role back, and a sleeping terminal picks it up again when it wakes. `/fork` carries the role over to the new session; `/new` starts outside any team. An explicit `/team leave` is remembered and frees the role for another session. A session whose role was removed or taken over is told once and stops trying, so no session lingers holding a role. A role that left or was removed disappears from the team.
 
 ## Storage and safety
 
