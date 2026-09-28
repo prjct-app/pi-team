@@ -1,3 +1,9 @@
+## [0.9.0](https://github.com/prjct-app/pi-team/compare/v0.8.0...v0.9.0) (2026-09-28)
+
+### Features
+
+* roles stay bound to their Pi session; confirmed takeover and cleanup ([#58](https://github.com/prjct-app/pi-team/issues/58)) ([36e7622](https://github.com/prjct-app/pi-team/commit/36e7622e90d1d532d35b17ae51154a4af70cb12b))
+
 ## [0.8.0](https://github.com/prjct-app/pi-team/compare/v0.7.0...v0.8.0) (2026-09-26)
 
 ### Features
