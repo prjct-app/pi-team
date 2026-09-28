@@ -58,7 +58,12 @@ export type Teammate = {
   readonly activity?: Activity;
 };
 /** Why this terminal is no longer in its team. */
-export type Fate = { readonly reason: 'deleted' } | { readonly reason: 'removed'; readonly by: string } | { readonly reason: 'replaced' };
+export type Fate = { readonly reason: 'deleted' } | { readonly reason: 'removed'; readonly by: string }
+  | { readonly reason: 'taken'; readonly cwd: string } | { readonly reason: 'replaced' };
+/** What joining would do, so the person confirms exactly that. */
+export type JoinPlan = { readonly create: boolean; readonly takeFrom?: string };
+/** Why a saved membership cannot come back: final, so the session stops trying. */
+const gone = (message: string): Error => Object.assign(new Error(message), { code: 'GONE' });
 
 /**
  * One thing that happened in a team. Stored by member ID, so renames never
@@ -137,17 +142,19 @@ export class TeamSession {
   }
   private profilePath(teamId: string): string { return join(this.runtime.paths.team(teamId), 'profile.json'); }
 
-  /** A team made before profiles is named by its ID, and its first member is admin. */
+  /**
+   * A team made before profiles is named by its ID. The admin is the stored
+   * one while that role is in the team; once it left or was removed, the
+   * longest-standing member is admin.
+   */
   private async profile(teamId: string): Promise<Profile> {
     const stored = await readJson(this.profilePath(teamId), assertProfile, 4096).catch(() => undefined);
-    if (stored) return stored;
-    const team = await this.runtime.teams.read(teamId).catch(() => undefined);
-    const first = await this.firstMember(teamId);
-    return { name: teamId, ...(first ? { adminId: first.memberId } : {}), createdAt: team?.createdAt ?? this.timestamp() };
-  }
-  private async firstMember(teamId: string): Promise<Member | undefined> {
-    const members = await this.runtime.teams.listMembers(teamId).catch(() => [] as Member[]);
-    return [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0];
+    const members = (await this.runtime.teams.listMembers(teamId).catch(() => [] as Member[])).filter(member => member.state === 'active');
+    const adminId = members.some(member => member.memberId === stored?.adminId) ? stored?.adminId
+      : [...members].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt))[0]?.memberId;
+    const { adminId: _stored, ...rest } = stored
+      ?? { name: teamId, createdAt: (await this.runtime.teams.read(teamId).catch(() => undefined))?.createdAt ?? this.timestamp() };
+    return { ...rest, ...(adminId ? { adminId } : {}) };
   }
 
   /** Teams on disk by ID, with their names; a half-deleted directory is not a team. */
@@ -202,15 +209,35 @@ export class TeamSession {
     return target;
   }
 
-  /** Admin only: takes `role` out of the team. Its terminal notices within seconds. */
-  async removeMember(role: string): Promise<void> {
-    const joined = await this.requireAdmin();
-    if (role === joined.role) throw new Error('You cannot remove yourself; leave or delete the team instead.');
-    const target = await this.activeMember(joined.teamId, role);
+  /**
+   * Who may remove `role` from the team (the joined one, or `teamId`): anyone
+   * may clear an offline role, the admin's included (the longest-standing
+   * member becomes admin); an online one takes the admin. Nobody removes
+   * itself: it leaves.
+   */
+  private async removable(role: string, teamId = this.state.get()?.teamId): Promise<{ readonly teamId: string; readonly target: Member }> {
+    if (!teamId) throw new Error('Not in a team.');
+    const joined = this.state.get();
+    const target = await this.activeMember(teamId, role);
+    const mine = joined?.teamId === teamId;
+    if (mine && target.memberId === joined.membership.memberId) throw new Error('You cannot remove yourself; leave or delete the team instead.');
+    const { adminId } = await this.profile(teamId);
+    if (await this.runtime.presence.online(target) && !(mine && joined.membership.memberId === adminId)) {
+      throw new Error(`${role} is online; only the admin can remove it. That terminal can leave with /team leave.`);
+    }
+    return { teamId, target };
+  }
+  /** For the command line: fails before asking the person to confirm something they may not do. */
+  async assertRemovable(role: string, teamId?: string): Promise<void> { await this.removable(role, teamId); }
+
+  /** Removes `role`: the role is gone and free again. A terminal still holding it notices within seconds. */
+  async removeMember(role: string, teamId?: string): Promise<void> {
+    const { teamId: id, target } = await this.removable(role, teamId);
+    const joined = this.state.get();
     // Recorded first: the removed terminal reads the timeline to learn why it lost its place.
-    await this.record(joined.teamId, { type: 'removed', by: joined.membership.memberId, to: target.memberId });
+    await this.record(id, { type: 'removed', by: joined?.teamId === id ? joined.membership.memberId : target.memberId, to: target.memberId });
     const at = this.timestamp();
-    await this.runtime.teams.updateMember(joined.teamId, target.memberId, target.generation, current => ({ ...current, state: 'left', leftAt: at, updatedAt: at }));
+    await this.runtime.teams.updateMember(id, target.memberId, target.generation, current => ({ ...current, state: 'left', leftAt: at, updatedAt: at }));
   }
 
   /** Admin, or a member renaming itself: gives `role` a new name. The member keeps its ID, messages and trace. */
@@ -244,44 +271,90 @@ export class TeamSession {
     await this.record(joined.teamId, { type: 'renamed', by: joined.membership.memberId, text: `team ${joined.team} → ${next}` });
   }
 
-  /** Admin only: deletes the team, its members, messages and timeline. Every terminal in it notices within seconds. */
-  async deleteTeam(): Promise<string> {
-    const joined = await this.requireAdmin();
-    this.state.set(() => undefined);
-    await withStorageLock(this.runtime.paths.teamLock(joined.teamId), () => rm(this.runtime.paths.team(joined.teamId), { recursive: true, force: true }));
-    return joined.team;
+  /**
+   * Who may delete a team (the joined one, or `teamId`): its admin, from
+   * inside it; anyone, once nobody in it is online.
+   */
+  private async deletable(teamId = this.state.get()?.teamId): Promise<{ readonly teamId: string; readonly name: string }> {
+    if (!teamId) throw new Error('Not in a team.');
+    if (this.state.get()?.teamId === teamId) { const joined = await this.requireAdmin(); return { teamId, name: joined.team }; }
+    const { name } = await this.profile(teamId);
+    if ((await this.teammates(teamId)).some(mate => mate.online)) throw new Error(`Someone is online in ${name}: only its admin can delete it.`);
+    return { teamId, name };
+  }
+  /** For the command line and the panel: fails before asking the person to confirm something they may not do. */
+  async assertDeletable(teamId?: string): Promise<void> { await this.deletable(teamId); }
+
+  /** Deletes the team, its members, messages and timeline. Every terminal in it notices within seconds. */
+  async deleteTeam(teamId?: string): Promise<string> {
+    const target = await this.deletable(teamId);
+    if (this.state.get()?.teamId === target.teamId) this.state.set(() => undefined);
+    await withStorageLock(this.runtime.paths.teamLock(target.teamId), () => rm(this.runtime.paths.team(target.teamId), { recursive: true, force: true }));
+    return target.name;
   }
 
-  /** After losing membership: was the team deleted, was this member removed, or did another terminal take it? */
-  async fate(teamId: string, memberId: string): Promise<Fate> {
+  /**
+   * After losing membership: was the team deleted, was this member removed,
+   * did another Pi session take the role over, or is this same session open
+   * in another terminal?
+   */
+  async fate(teamId: string, memberId: string, sessionId?: string): Promise<Fate> {
     if (!await this.exists(teamId)) return { reason: 'deleted' };
     const events = [...await this.stored(teamId)].reverse();
     const removal = events.find(event => event.type === 'removed' && event.to === memberId);
     const rejoined = events.find(event => event.type === 'joined' && event.by === memberId);
     if (removal && (!rejoined || removal.at >= rejoined.at)) {
       const names = await this.names(teamId);
-      return { reason: 'removed', by: names.get(removal.by) ?? 'the admin' };
+      return { reason: 'removed', by: removal.by === memberId ? 'another terminal' : names.get(removal.by) ?? 'the admin' };
     }
+    const member = await this.runtime.teams.readMember(teamId, memberId).catch(() => undefined);
+    if (sessionId && member?.sessionId && member.sessionId !== sessionId) return { reason: 'taken', cwd: member.cwd };
     return { reason: 'replaced' };
+  }
+
+  /**
+   * What joining `role` in `team` from `sessionId` would do: create the team,
+   * join, or take over a role another Pi session holds while it is offline.
+   * A role online in another terminal is refused here, before any question.
+   */
+  async plan(team: string, role: string, sessionId: string): Promise<JoinPlan> {
+    const teamId = await this.findTeam(assertName(team, 'Team'));
+    assertName(role, 'Role');
+    if (!teamId) return { create: true };
+    const holder = (await this.runtime.teams.listMembers(teamId)).find(member => member.alias === role && member.state === 'active');
+    if (!holder || holder.sessionId === sessionId) return { create: false };
+    if (await this.runtime.presence.online(holder)) throw new Error(`"${role}" is online in another terminal (${holder.cwd}). Pick another role.`);
+    return { create: false, takeFrom: holder.cwd };
   }
 
   /**
    * Joins the team named `team` as `role`, creating it on first use. Leaves any
    * team joined before. With `saved`, rejoins that exact team and member by ID.
    */
-  async join(input: { readonly team: string; readonly role: string; readonly sessionId: string; readonly cwd: string; readonly saved?: Saved }): Promise<{ readonly created: boolean }> {
+  async join(input: { readonly team: string; readonly role: string; readonly sessionId: string; readonly cwd: string; readonly saved?: Saved; readonly takeover?: boolean }): Promise<{ readonly created: boolean }> {
     await this.leave();
     const found = input.saved && await this.exists(input.saved.teamId) ? input.saved.teamId : await this.findTeam(assertName(input.team, 'Team'));
-    if (!found && input.saved) throw new Error(`Team ${input.saved.team} no longer exists.`);
+    if (!found && input.saved) throw gone(`Team ${input.saved.team} no longer exists.`);
     const teamId = found ?? await this.createTeam(input.team);
     // Rejoining by ID keeps the name the member has now, even if it was renamed while away.
     const current = input.saved ? (await this.runtime.teams.readMember(teamId, input.saved.memberId).catch(() => undefined)) : undefined;
+    // A saved role comes back only to the session that holds it, and never after it was removed.
+    if (current && !input.takeover) {
+      const fate = await this.fate(teamId, current.memberId, input.sessionId);
+      if (fate.reason === 'taken') throw gone(`${current.alias} in ${input.saved!.team} now belongs to another Pi session (${fate.cwd}).`);
+      if (fate.reason === 'removed') throw gone(`${current.alias} was removed from ${input.saved!.team} by ${fate.by}.`);
+    }
     const role = current?.alias ?? assertName(input.role, 'Role');
-    const membership = await this.runtime.memberships.join({ teamId, alias: role, sessionId: input.sessionId, cwd: input.cwd, kind: 'external', ...(current ? { memberId: current.memberId } : {}) })
-      .catch(error => {
-        if ((error as { code?: string }).code === 'ALREADY_EXISTS') throw new Error(`"${role}" is already online in team ${input.team}. Pick another role.`);
-        throw error;
-      });
+    // A role belongs to the Pi session that took it until it leaves, is removed, or is taken over while offline.
+    const membership = await this.runtime.memberships.join({
+      teamId, alias: role, sessionId: input.sessionId, cwd: input.cwd, kind: 'external', boundToSession: true,
+      ...(input.takeover ? { adopt: true } : {}), ...(current ? { memberId: current.memberId } : {}),
+    }).catch(error => {
+      const { code, cwd } = error as { code?: string; cwd?: string };
+      if (code === 'OWNED') throw new Error(`"${role}" in team ${input.team} belongs to another Pi session (${cwd}). Join it again to take it over.`);
+      if (code === 'ALREADY_EXISTS') throw new Error(`"${role}" is online in another terminal in team ${input.team}. Pick another role.`);
+      throw error;
+    });
     if (!found) {
       const profile = await this.profile(teamId);
       await replaceAtomicJson(this.profilePath(teamId), { ...profile, adminId: membership.memberId }, { maxBytes: 4096 });
@@ -293,6 +366,16 @@ export class TeamSession {
     return { created: !found };
   }
 
+  /** Offline without giving up the role: this session takes it back on its next start. */
+  async disconnect(): Promise<Joined | undefined> {
+    const joined = this.state.get();
+    if (!joined) return undefined;
+    this.state.set(() => undefined);
+    await this.runtime.memberships.disconnect(joined.membership).catch(() => {});
+    return joined;
+  }
+
+  /** Gives the role up: another session may take it afterwards. */
   async leave(): Promise<Joined | undefined> {
     const joined = this.state.get();
     if (!joined) return undefined;
@@ -307,13 +390,20 @@ export class TeamSession {
    * member, returns what it lost; when its names changed, returns them.
    */
   async heartbeat(): Promise<{ readonly lost?: Saved; readonly renamed?: { readonly team: string; readonly role: string } }> {
+    const before = this.state.get();
+    if (!before) return {};
+    const alive = await this.runtime.memberships.heartbeat(before.membership).then(() => true, () => false);
+    // A missed renewal is not a lost place: only a gone team or a member that moved on is.
+    const kept = alive ? 'kept' : await this.runtime.memberships.reclaim(before.membership).then(
+      membership => { this.state.set(current => current === before ? { ...current, membership } : current); return 'kept' as const; },
+      (error: { code?: string }) => error?.code === 'FENCED' || error?.code === 'NOT_FOUND' ? 'lost' as const : 'retry' as const);
+    if (kept === 'retry') return {};
+    if (kept === 'lost') {
+      this.state.set(current => current === before ? undefined : current);
+      return { lost: { teamId: before.teamId, memberId: before.membership.memberId, team: before.team, role: before.role } };
+    }
     const joined = this.state.get();
     if (!joined) return {};
-    const alive = await this.runtime.memberships.heartbeat(joined.membership).then(() => true, () => false);
-    if (!alive) {
-      this.state.set(current => current === joined ? undefined : current);
-      return { lost: { teamId: joined.teamId, memberId: joined.membership.memberId, team: joined.team, role: joined.role } };
-    }
     const member = await this.runtime.teams.readMember(joined.teamId, joined.membership.memberId).catch(() => undefined);
     const team = (await this.profile(joined.teamId)).name;
     const role = member?.alias ?? joined.role;
@@ -351,11 +441,11 @@ export class TeamSession {
   async teammates(teamId = this.state.get()?.teamId): Promise<Teammate[]> {
     if (!teamId) return [];
     const self = this.state.get();
-    const members = await this.runtime.teams.listMembers(teamId);
+    // A role that left or was removed is gone; its record stays only so the timeline keeps its name.
+    const members = (await this.runtime.teams.listMembers(teamId)).filter(member => member.state === 'active');
     const { adminId } = await this.profile(teamId);
-    // An active member wins over an old record that once had the same name.
     const shown = [...members]
-      .sort((a, b) => Number(b.state === 'active') - Number(a.state === 'active') || b.updatedAt.localeCompare(a.updatedAt))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .filter((member, index, all) => all.findIndex(other => other.alias === member.alias) === index);
     const list = await Promise.all(shown.map(async member => {
       const online = await this.runtime.presence.online(member);

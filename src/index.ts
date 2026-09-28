@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
-import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, toEnglishInstructions, type Complete } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, setMode, toEnglishInstructions, type Complete } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
@@ -28,6 +28,13 @@ const LEFT = 'You are no longer in a team: team_peers and team_message are gone,
 /** Turns teammates may open in a row before the person says anything. Stops two agents ping-ponging forever. */
 export const AUTO_TURN_LIMIT = 6;
 const HEARTBEAT_MS = 5_000;
+const NOTHING_JOINED = 'Nothing joined.';
+/** The member a closing session hands to the fork that replaces it in the same process. */
+const HANDOFF = Symbol.for('prjct.pi-team.handoff');
+const handoff = {
+  get: (): string | undefined => (globalThis as Record<symbol, string | undefined>)[HANDOFF],
+  set: (memberId: string | undefined): void => { (globalThis as Record<symbol, string | undefined>)[HANDOFF] = memberId; },
+};
 
 /** Saved in the session by ID; `{ team, role }` without IDs comes from before IDs and is matched by name. */
 type Membership = Saved | { readonly team: string; readonly role: string; readonly teamId?: undefined } | { readonly left: true };
@@ -76,10 +83,10 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     if (ctx?.hasUI) ctx.ui.notify(text, level);
     else pi.sendMessage({ customType: 'team-status', content: text, display: true }, { triggerTurn: false, deliverAs: 'nextTurn' });
   };
-  const showMembership = (): void => {
+  /** Team and role on the mode line right above the editor, while joined. */
+  const showMembership = (ctx: ExtensionContext | undefined = store.get().ctx): void => {
     const joined = session.current();
-    const ctx = store.get().ctx;
-    if (ctx?.hasUI) ctx.ui.setStatus('team', joined ? `team ${joined.team} · ${joined.role}` : undefined);
+    if (ctx) setMode(ctx, 'team', joined ? `team ${joined.team} · ${joined.role}` : undefined);
   };
   const refreshCompletions = async (): Promise<void> => {
     const teams = (await session.teams()).map(team => team.name);
@@ -145,10 +152,13 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const joined = session.saved();
     return { ...(joined ? { joined } : {}), teams: await session.overview() };
   };
-  const deleteTeam = async (): Promise<string> => {
-    const team = await session.deleteTeam();
-    dropMembership(); announce(LEFT);
-    pi.appendEntry<Membership>(ENTRY, { left: true });
+  const deleteTeam = async (teamId?: string): Promise<string> => {
+    const mine = !teamId || session.current()?.teamId === teamId;
+    const team = await session.deleteTeam(teamId);
+    if (mine) {
+      dropMembership(); announce(LEFT);
+      pi.appendEntry<Membership>(ENTRY, { left: true });
+    }
     return `Deleted team ${team}.`;
   };
   const leaveTeam = async (): Promise<string> => {
@@ -158,8 +168,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return left ? `Left team ${left.team}.` : 'Not in a team.';
   };
 
-  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved): Promise<boolean> => {
-    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}) });
+  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved, takeover = false): Promise<boolean> => {
+    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}) });
     registerTools(); toolsOn(true); showMembership();
     announce(identityText(team, role), ctx);
     store.set(slot => ({ ...slot, autoTurns: 0, pausedNotice: false, beatAt: now() }));
@@ -185,17 +195,30 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     `You are "${role}" in team "${team}", one of several independent Pi terminals. Do your own work with your own tools and subagents. Teammates are reachable with team_peers and team_message; never wait on them.`;
   /** Join, remember it in the session, and say so. */
   const remember = (): void => { const saved = session.saved(); if (saved) pi.appendEntry<Membership>(ENTRY, saved); };
+  /**
+   * Join `role` in `team`, after the person confirms exactly what happens:
+   * a new team, a join, or taking over a role an offline session holds. The
+   * role then belongs to this session until it leaves or is removed.
+   */
   const enter = async (ctx: ExtensionContext, team: string, role: string): Promise<string> => {
-    const created = await joinTeam(ctx, team, role);
+    const plan = await session.plan(team, role, ctx.sessionManager.getSessionId());
+    const joined = session.current();
+    const before = joined && (joined.team !== team || joined.role !== role) ? ` You leave ${joined.team} (${joined.role}) first, and that role is freed.` : '';
+    const bound = 'The role stays bound to this Pi session until you leave or are removed.';
+    const question = plan.create ? [`Create team ${team} and join as ${role}?`, `You will be its admin. ${bound}${before}`]
+      : plan.takeFrom ? [`Take over ${role} in ${team}?`, `${role} belongs to the Pi session in ${plan.takeFrom}, which is offline. It moves to this session with its history; that session will not get it back.${before}`]
+      : [`Join ${team} as ${role}?`, `${bound}${before}`];
+    if (ctx.hasUI && !await confirm(ctx, question[0]!, question[1]!)) return NOTHING_JOINED;
+    const created = await joinTeam(ctx, team, role, undefined, !!plan.takeFrom);
     remember();
-    return `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
+    return plan.takeFrom ? `Took over ${role} in team ${team}.` : `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
   };
   const sendFromPerson = async (ctx: ExtensionContext, to: string, text: string): Promise<void> => {
     const body = await toEnglishInstructions(text, options.complete ?? sessionComplete(ctx));
     await session.send(to, 'info', `From the person at this terminal: ${body}`);
   };
 
-  /** Every removal, deletion, departure and rename is confirmed first. */
+  /** Every join, takeover, removal, deletion, departure and rename is confirmed first. */
   const confirm = (ctx: ExtensionContext, title: string, detail: string): Promise<boolean> => ctx.ui.confirm(title, detail);
   const renameTeam = async (next: string): Promise<string> => {
     const before = session.current()?.team;
@@ -222,15 +245,22 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       return teamItemId(intent.teamId);
     }
     if (intent.action === 'remove') {
-      if (await confirm(ctx, `Remove ${intent.role}?`, `${intent.role}'s terminal leaves the team within seconds. It can join again.`)) {
-        await queue(() => session.removeMember(intent.role));
+      await queue(() => session.assertRemovable(intent.role, intent.teamId));
+      if (await confirm(ctx, `Remove ${intent.role}?`, `The role is removed from the team and free again. A terminal still holding it leaves within seconds.`)) {
+        await queue(() => session.removeMember(intent.role, intent.teamId));
         output(`Removed ${intent.role}.`);
       }
       return teamItemId(intent.teamId);
     }
+    if (intent.action === 'take') {
+      output(await queue(() => enter(ctx, intent.team, intent.role)));
+      const saved = session.saved();
+      return saved ? memberItemId(saved.teamId, saved.memberId) : memberItemId(intent.teamId, intent.memberId);
+    }
     if (intent.action === 'delete') {
+      await queue(() => session.assertDeletable(intent.teamId));
       if (!await confirm(ctx, `Delete team ${intent.team}?`, 'Deletes its members, messages and timeline for everyone. This cannot be undone.')) return teamItemId(intent.teamId);
-      output(await queue(deleteTeam));
+      output(await queue(() => deleteTeam(intent.teamId)));
       return undefined;
     }
     if (intent.action === 'rename-team') {
@@ -296,12 +326,13 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       const lost = beat.lost;
       if (lost) {
         dropMembership();
-        const fate: Fate = await session.fate(lost.teamId, lost.memberId).catch((): Fate => ({ reason: 'replaced' }));
-        // Removed or deleted is final for this session; a replaced role may come back on reload.
+        const fate: Fate = await session.fate(lost.teamId, lost.memberId, ctx.sessionManager.getSessionId()).catch((): Fate => ({ reason: 'replaced' }));
+        // Removed, deleted or taken over is final: this session stops trying. The same session in another terminal is not.
         if (fate.reason !== 'replaced') pi.appendEntry<Membership>(ENTRY, { left: true });
         output(fate.reason === 'deleted' ? `Team ${lost.team} was deleted.`
           : fate.reason === 'removed' ? `You were removed from ${lost.team} by ${fate.by}.`
-          : `Another terminal took the role ${lost.role}, so this one left ${lost.team}.`, 'error');
+          : fate.reason === 'taken' ? `${lost.role} in ${lost.team} was taken over by the Pi session in ${fate.cwd}; this one left.`
+          : `This session was opened in another terminal, which now holds ${lost.role} in ${lost.team}; this one left.`, 'error');
         return;
       }
       if (beat.renamed) {
@@ -358,8 +389,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
         if (command.action === 'remove') {
           const joined = session.current();
           if (!joined) throw new Error('Not in a team.');
-          await session.assertAdmin();
-          if (ctx.hasUI && !await ctx.ui.confirm(`Remove ${command.role} from ${joined.team}?`, `${command.role}'s terminal leaves the team within seconds.`)) return;
+          await session.assertRemovable(command.role);
+          if (ctx.hasUI && !await ctx.ui.confirm(`Remove ${command.role} from ${joined.team}?`, 'The role is removed from the team and free again. A terminal still holding it leaves within seconds.')) return;
           await session.removeMember(command.role);
           output(`Removed ${command.role} from ${joined.team}.`);
           return;
@@ -369,10 +400,14 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           if (!joined) throw new Error('Not in a team.');
           await session.assertAdmin();
           if (ctx.hasUI && !await ctx.ui.confirm(`Delete team ${joined.team}?`, 'Deletes its members, messages and timeline for everyone. This cannot be undone.')) return;
-          output(await deleteTeam());
+          output(await deleteTeam(joined.teamId));
           return;
         }
-        if (command.action === 'join') { output(`${await enter(ctx, command.team, command.role)}\n${await statusText()}`); return; }
+        if (command.action === 'join') {
+          const joined = await enter(ctx, command.team, command.role);
+          output(session.current() && joined !== NOTHING_JOINED ? `${joined}\n${await statusText()}` : joined);
+          return;
+        }
         await sendFromPerson(ctx, command.to, command.body);
         output(`Delivered to ${command.to}.`);
       } catch (error) { output(clean(error instanceof Error ? error.message : 'Team command failed.', 512), 'error'); }
@@ -390,14 +425,25 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return container;
   });
 
-  pi.on('session_start', async (_event, ctx) => {
+  pi.on('session_start', async (event, ctx) => {
     store.set(slot => ({ ...slot, ctx }));
     // Restore the membership this session last chose (after /reload or resume).
     const entries = ctx.sessionManager.getEntries() as readonly { type?: string; customType?: string; data?: Membership }[];
     const last = [...entries].reverse().find(entry => entry.type === 'custom' && entry.customType === ENTRY)?.data;
+    // A fork carries the role forward from the session this terminal just closed.
+    const handed = handoff.get();
+    handoff.set(undefined);
+    const adopt = event?.reason === 'fork' && !!last && 'memberId' in last && last.memberId === handed;
     if (last && 'team' in last) {
-      await queue(() => joinTeam(ctx, last.team, last.role, last.teamId ? last : undefined)).catch(error => {
-        output(`Team: could not rejoin ${last.team} as ${last.role}: ${clean(error instanceof Error ? error.message : 'unknown error', 256)}`, 'error');
+      await queue(() => joinTeam(ctx, last.team, last.role, last.teamId ? last : undefined, adopt)).catch(error => {
+        const reason = clean(error instanceof Error ? error.message : 'unknown error', 256);
+        // Gone for good (removed, taken over, team deleted): say so once and never try again, so no session lingers.
+        if ((error as { code?: string }).code === 'GONE') {
+          pi.appendEntry<Membership>(ENTRY, { left: true });
+          output(`Team: this session is no longer in ${last.team}. ${reason}`);
+          return;
+        }
+        output(`Team: could not rejoin ${last.team} as ${last.role}: ${reason}`, 'error');
       });
     }
     if (!store.get().timer) {
@@ -424,12 +470,15 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     if (event.source === 'interactive') store.set(slot => ({ ...slot, autoTurns: 0, pausedNotice: false }));
     return undefined;
   });
-  pi.on('session_shutdown', async () => {
+  pi.on('session_shutdown', async (event, ctx) => {
     const timer = store.get().timer;
     if (timer) clearInterval(timer);
     store.set(slot => ({ ...slot, closed: true, timer: undefined }));
-    // Release the role now so /reload or resume can take it back at once; the entry restores it.
-    await queue(() => session.leave()).catch(() => {});
+    // Go offline but keep the role: it belongs to this session, which takes it back on /reload or resume.
+    const left = await queue(() => session.disconnect()).catch(() => undefined);
+    if (event?.reason === 'fork' && left) handoff.set(left.membership.memberId);
+    // The mode line is shared by the process: a /new session must not inherit this team.
+    showMembership(ctx);
   });
 }
 
