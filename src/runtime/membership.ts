@@ -93,6 +93,10 @@ export class MembershipService {
     readonly kind: MemberKind;
     /** Rejoin this exact member (its address survives renames); otherwise matched by alias. */
     readonly memberId?: string;
+    /** An active member belongs to the session that holds it, online or not; only it may rejoin. */
+    readonly boundToSession?: boolean;
+    /** Take over an active member from another session: a fork carrying the role forward. */
+    readonly adopt?: boolean;
   }): Promise<Membership> {
     return withStorageLock(this.lockPath(input.teamId), async () => {
       const team = await this.teams.read(input.teamId);
@@ -102,6 +106,9 @@ export class MembershipService {
       const byId = input.memberId ? members.filter(member => member.memberId === input.memberId) : [];
       const matching = byId.length ? byId : members.filter(member => member.alias === input.alias);
       const active = matching.find(member => member.state === 'active');
+      if (input.boundToSession && !input.adopt && active && active.sessionId !== input.sessionId) {
+        throw Object.assign(new Error(`Alias "${active.alias}" belongs to another session.`), { code: 'OWNED', cwd: active.cwd });
+      }
       if (active && await this.presence.online(active)) {
         throw Object.assign(new Error(`Alias "${active.alias}" is already active.`), { code: 'ALREADY_EXISTS' });
       }
@@ -163,6 +170,31 @@ export class MembershipService {
     await withStorageLock(this.lockPath(membership.teamId), async () => {
       await this.assertOwner(membership);
       await this.presence.renew(membership);
+    });
+  }
+
+  /**
+   * After a failed heartbeat (the machine slept, the disk stalled): keeps the
+   * membership while its member record is still this one, taking back a lease
+   * that lapsed. Fenced once the member moved on (removed, or another terminal
+   * joined under it); NOT_FOUND once the team is gone.
+   */
+  async reclaim(membership: Membership): Promise<Membership> {
+    return withStorageLock(this.lockPath(membership.teamId), async () => {
+      if (!await this.teams.read(membership.teamId)) throw Object.assign(new Error(`Unknown team "${membership.teamId}".`), { code: 'NOT_FOUND' });
+      const member = await this.teams.readMember(membership.teamId, membership.memberId);
+      if (!member || member.state !== 'active' || member.generation !== membership.memberGeneration || member.sessionId !== membership.sessionId) {
+        throw Object.assign(new Error('Membership identity has been replaced.'), { code: 'FENCED' });
+      }
+      return { ...membership, ...await this.presence.reclaim(membership) };
+    });
+  }
+
+  /** Goes offline and keeps the member: the same session takes it back on its next start. */
+  async disconnect(membership: Membership): Promise<void> {
+    await withStorageLock(this.lockPath(membership.teamId), async () => {
+      await this.assertOwner(membership);
+      await this.presence.release(membership).catch(() => {});
     });
   }
 

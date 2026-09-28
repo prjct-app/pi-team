@@ -20,7 +20,8 @@ export type TeamIntent =
   | { readonly action: 'delete'; readonly teamId: string; readonly team: string }
   | { readonly action: 'rename-team'; readonly teamId: string; readonly team: string }
   | { readonly action: 'rename-member'; readonly teamId: string; readonly memberId: string; readonly role: string }
-  | { readonly action: 'remove'; readonly teamId: string; readonly memberId: string; readonly role: string };
+  | { readonly action: 'remove'; readonly teamId: string; readonly memberId: string; readonly role: string }
+  | { readonly action: 'take'; readonly teamId: string; readonly team: string; readonly memberId: string; readonly role: string };
 
 export type TeamPanelOps = Readonly<{
   load(): Promise<TeamSnapshot>;
@@ -72,7 +73,7 @@ export function eventLine(event: TeamEvent): string {
     case 'idle': return `${at}  ${event.role} idle`;
     case 'message': return `${at}  ${event.role} → ${event.to} ${event.kind}: ${text}`;
     case 'refused': return `${at}  ${event.role} → ${event.to} ${event.kind} refused (${text})`;
-    case 'removed': return `${at}  ${event.role} removed ${event.to}`;
+    case 'removed': return event.byId === event.toId ? `${at}  ${event.role} removed (offline role cleared)` : `${at}  ${event.role} removed ${event.to}`;
     case 'renamed': return `${at}  ${event.role} renamed ${text}`;
     default: return `${at}  ${event.role} ${event.type}`;
   }
@@ -104,6 +105,18 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
   /** Only the admin, while in its own team, may rename it, rename or remove members, or delete it. */
   const amAdmin = (teamId: string | undefined): boolean =>
     inTeam(teamId) && !!cell.value.teams.find(entry => entry.id === teamId)?.mates.some(mate => mate.admin && mate.self);
+  /** An offline role of someone else: this terminal can join as it (a takeover, confirmed first). */
+  const takeable = (item: PanelItem | undefined): boolean => { const mate = mateOf(item); return !!mate && !mate.self && !mate.online; };
+  /** Who may remove the selected role: anyone clears an offline one, the admin also an online one. Nobody removes itself. */
+  const removable = (item: PanelItem | undefined): boolean => {
+    const mate = mateOf(item);
+    return !!mate && !mate.self && (!mate.online || amAdmin(teamOf(item)?.id));
+  };
+  /** Who may delete the selected team: its admin from inside, anyone once nobody in it is online. */
+  const deletable = (item: PanelItem | undefined): boolean => {
+    const team = teamOf(item);
+    return isTeamRow(item) && !!team && (amAdmin(team.id) || !team.mates.some(mate => mate.online));
+  };
   /** Why the selected member cannot be messaged right now, or undefined when it can. */
   const whyNot = (item: PanelItem | undefined): string | undefined => {
     const mate = mateOf(item);
@@ -111,7 +124,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
     if (!mate || !team) return 'Select a member to message.';
     if (mate.self) return 'That is you.';
     if (!inTeam(team.id)) return `Join ${team.name} first to message its members: select ${team.name} and press a.`;
-    if (!mate.online) return `${mate.role} is offline; nothing would be delivered.`;
+    if (!mate.online) return `${mate.role} is offline; nothing would be delivered. Press a to join as ${mate.role}.`;
     return undefined;
   };
   const ask = (panel: { close(): void }, intent: TeamIntent): void => { panel.close(); ops.request(intent); };
@@ -125,9 +138,14 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
   const actions: PanelAction[] = [
     { key: 'n', label: 'New team', run: (_item, panel) => ask(panel, { action: 'create' }) },
     {
-      key: 'a', label: item => `Join ${teamOf(item)?.name ?? ''}`.trim(),
-      when: item => !!teamOf(item) && !inTeam(teamOf(item)?.id),
-      run: (item, panel) => ask(panel, { action: 'join', teamId: teamOf(item)!.id, team: teamOf(item)!.name }),
+      // On an offline role: join as it. On a team you are not in: join it under a role you type.
+      key: 'a', label: item => takeable(item) ? `Join as ${mateOf(item)!.role}` : `Join ${teamOf(item)?.name ?? ''}`.trim(),
+      when: item => takeable(item) || (!!teamOf(item) && !inTeam(teamOf(item)?.id)),
+      run: (item, panel) => {
+        const team = teamOf(item)!;
+        const mate = mateOf(item);
+        ask(panel, takeable(item) && mate ? { action: 'take', teamId: team.id, team: team.name, memberId: mate.id, role: mate.role } : { action: 'join', teamId: team.id, team: team.name });
+      },
     },
     // Shown on every member row, so it is always findable; says why when it cannot send.
     { key: 'm', label: item => `Message ${mateOf(item)?.role ?? ''}`.trim(), when: item => !!mateOf(item), run: message },
@@ -143,7 +161,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
     },
     {
       key: 'x', label: item => `Remove ${mateOf(item)?.role ?? ''}`.trim(),
-      when: item => { const mate = mateOf(item); return !!mate && !mate.self && amAdmin(teamOf(item)?.id); },
+      when: removable,
       run: (item, panel) => { const mate = mateOf(item)!; ask(panel, { action: 'remove', teamId: teamOf(item)!.id, memberId: mate.id, role: mate.role }); },
     },
     {
@@ -153,7 +171,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
     },
     {
       key: 'd', label: item => `Delete ${teamOf(item)?.name ?? 'team'}`,
-      when: item => isTeamRow(item) && amAdmin(teamOf(item)?.id),
+      when: deletable,
       run: (item, panel) => ask(panel, { action: 'delete', teamId: teamOf(item)!.id, team: teamOf(item)!.name }),
     },
   ];
