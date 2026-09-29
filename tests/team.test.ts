@@ -114,10 +114,16 @@ test('two terminals join by name, see each other working, and a message arrives 
   assert.match(a.sent[0]!.content, /Team message from reviewer \(question/);
   assert.deepEqual(a.sent[0]!.options, { triggerTurn: true, deliverAs: 'steer' });
 
-  // Idle recipient: the message opens a turn.
-  await a.tool('team_message', { to: 'reviewer', kind: 'info', body: '401, see src/auth.ts' });
+  // Idle recipient: a question opens a turn.
+  await a.tool('team_message', { to: 'reviewer', kind: 'question', body: 'Is 401 right for src/auth.ts?' });
   await until(() => b.sent.length === 1);
   assert.deepEqual(b.sent[0]!.options, { triggerTurn: true, deliverAs: 'followUp' });
+
+  // Idle recipient: info is shown and waits for the next turn instead of opening one.
+  await a.tool('team_message', { to: 'reviewer', kind: 'info', body: '401, see src/auth.ts' });
+  await until(() => b.sent.length === 2);
+  assert.match(b.sent[1]!.content, /Team message from backend \(info/);
+  assert.deepEqual(b.sent[1]!.options, { triggerTurn: false, deliverAs: 'nextTurn' });
 });
 
 test('an offline or unknown teammate fails now instead of queuing', async (t) => {
@@ -170,14 +176,14 @@ test('teammates cannot ping-pong forever: turns stop after the limit until the p
   const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
   for (const index of Array.from({ length: AUTO_TURN_LIMIT + 1 }, (_, i) => i)) {
-    await b.tool('team_message', { to: 'backend', kind: 'info', body: `note ${index}` });
+    await b.tool('team_message', { to: 'backend', kind: 'question', body: `question ${index}` });
     await until(() => a.sent.length === index + 1);
   }
   assert.equal(a.sent.filter(s => s.options.triggerTurn).length, AUTO_TURN_LIMIT);
   assert.equal(a.sent.at(-1)!.options.triggerTurn, false);
   assert.ok(a.notices.some(n => /no longer start turns until you type/.test(n)));
   await a.emit('input', { source: 'interactive', text: 'go on' });
-  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'after you typed' });
+  await b.tool('team_message', { to: 'backend', kind: 'question', body: 'after you typed' });
   await until(() => a.sent.length === AUTO_TURN_LIMIT + 2);
   assert.equal(a.sent.at(-1)!.options.triggerTurn, true);
 });
