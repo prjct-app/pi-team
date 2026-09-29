@@ -125,7 +125,9 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       name: 'team_message', label: 'Message a teammate',
       description: 'Send a message to another Pi terminal on your team, by role. It is delivered now or refused now (offline): nothing is queued, nothing is a task you hand off and wait for. '
         + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
-        + 'Kinds: info to share a finding, question to ask (they may answer later with team_message), handoff to pass them something they will own. ' + ENGLISH_RULE,
+        + 'Kinds: info to share a finding (it does not wake an idle teammate; they read it with their next turn), '
+        + 'question to ask (they may answer later with team_message), handoff to pass them something they will own. Use question or handoff only when they must act on it now. '
+        + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE,
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48, description: 'The teammate role (see team_peers).' }),
         kind: StringEnum(MESSAGE_KINDS),
@@ -215,7 +217,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   };
   const sendFromPerson = async (ctx: ExtensionContext, to: string, text: string): Promise<void> => {
     const body = await toEnglishInstructions(text, options.complete ?? sessionComplete(ctx));
-    await session.send(to, 'info', `From the person at this terminal: ${body}`);
+    // A handoff, so it wakes the receiver: the person expects it acted on.
+    await session.send(to, 'handoff', `From the person at this terminal: ${body}`);
   };
 
   /** Every join, takeover, removal, deletion, departure and rename is confirmed first. */
@@ -305,6 +308,13 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
 
   const deliver = (ctx: ExtensionContext, message: Incoming): void => {
     const idle = ctx.isIdle();
+    // info asks nothing of the receiver: it is shown now and read with the next
+    // turn. Waking an idle terminal for it mostly bought a turn that restated it.
+    if (idle && message.kind === 'info') {
+      pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } },
+        { triggerTurn: false, deliverAs: 'nextTurn' });
+      return;
+    }
     // A busy terminal gets it steered into the work already running: no new turn, no wait.
     const opensTurn = idle && store.get().autoTurns < AUTO_TURN_LIMIT;
     if (idle && !opensTurn && !store.get().pausedNotice) {
