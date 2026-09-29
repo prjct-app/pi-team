@@ -1,3 +1,9 @@
+## [0.9.1](https://github.com/prjct-app/pi-team/compare/v0.9.0...v0.9.1) (2026-09-29)
+
+### Bug Fixes
+
+* info messages no longer wake an idle teammate ([#61](https://github.com/prjct-app/pi-team/issues/61)) ([8e6baa5](https://github.com/prjct-app/pi-team/commit/8e6baa558452c3271f0f9f1b0777871abb763061))
+
 ## [0.9.0](https://github.com/prjct-app/pi-team/compare/v0.8.0...v0.9.0) (2026-09-28)
 
 ### Features

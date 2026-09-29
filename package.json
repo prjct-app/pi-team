@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-team",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Connect independent Pi terminals into a named team: live presence and activity, and messages that never queue.",
   "type": "module",
   "keywords": [
