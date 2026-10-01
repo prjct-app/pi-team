@@ -19,14 +19,26 @@ export type InstallTeamOptions = {
   readonly now?: () => number;
   /** Rewrites what the person types in /team send into English. Defaults to the cheapest reachable model. */
   readonly complete?: Complete;
+  /** The window WAKE_LIMIT counts wakes in; defaults to WAKE_WINDOW_MS. */
+  readonly wakeWindowMs?: number;
 };
 
 const ENTRY = 'team-membership';
 const TOOLS = ['team_peers', 'team_message'];
 const IDENTITY = 'team-identity';
 const LEFT = 'You are no longer in a team: team_peers and team_message are gone, and earlier team context no longer applies.';
-/** Turns teammates may open in a row before the person says anything. Stops two agents ping-ponging forever. */
-export const AUTO_TURN_LIMIT = 6;
+/**
+ * Turns teammates may open in an idle terminal within WAKE_WINDOW_MS. Stops two
+ * agents ping-ponging; never stops the team for good: messages past the limit
+ * wait and wake the terminal as soon as the window allows, or when the person types.
+ */
+export const WAKE_LIMIT = 6;
+export const WAKE_WINDOW_MS = 10 * 60_000;
+/** Kinds models reach for that are not ours: an answer is information, a task is a handoff. */
+const KIND_ALIASES: Readonly<Record<string, string>> = {
+  answer: 'info', reply: 'info', ack: 'info', update: 'info', fyi: 'info', status: 'info', result: 'info',
+  ask: 'question', request: 'handoff', task: 'handoff',
+};
 const HEARTBEAT_MS = 5_000;
 const NOTHING_JOINED = 'Nothing joined.';
 /** The member a closing session hands to the fork that replaces it in the same process. */
@@ -43,8 +55,11 @@ type Slot = {
   readonly timer?: ReturnType<typeof setInterval>;
   readonly closed: boolean;
   readonly toolsRegistered: boolean;
-  readonly autoTurns: number;
-  readonly pausedNotice: boolean;
+  /** When teammates last opened a turn here, within the window. */
+  readonly wakes: readonly number[];
+  /** Messages past the wake limit, waiting for the window or the person. */
+  readonly held: readonly Incoming[];
+  readonly heldNotice: boolean;
   readonly beatAt: number;
   readonly focus?: string;
   readonly teams: readonly string[];
@@ -71,7 +86,7 @@ export function incomingText(message: Incoming): string {
 export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}): void {
   const now = options.now ?? Date.now;
   const session = new TeamSession(new TeamRuntime(new TeamPaths(options.root), now), now);
-  const cell: { value: Slot } = { value: { closed: false, toolsRegistered: false, autoTurns: 0, pausedNotice: false, beatAt: 0, teams: [], roles: [] } };
+  const cell: { value: Slot } = { value: { closed: false, toolsRegistered: false, wakes: [], held: [], heldNotice: false, beatAt: 0, teams: [], roles: [] } };
   const store = { get: (): Slot => cell.value, set: (next: (current: Slot) => Slot): void => { cell.value = next(cell.value); } };
   const serial = { value: Promise.resolve() as Promise<unknown> };
   const queue = <T>(action: () => Promise<T>): Promise<T> => {
@@ -125,14 +140,20 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       name: 'team_message', label: 'Message a teammate',
       description: 'Send a message to another Pi terminal on your team, by role. It is delivered now or refused now (offline): nothing is queued, nothing is a task you hand off and wait for. '
         + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
-        + 'Kinds: info to share a finding (it does not wake an idle teammate; they read it with their next turn), '
-        + 'question to ask (they may answer later with team_message), handoff to pass them something they will own. Use question or handoff only when they must act on it now. '
+        + 'Kinds: info to share a finding or an answer, question to ask (they may answer later with team_message), handoff to pass them something they will own. '
+        + 'Every kind reaches them now and wakes them if idle, so send only what they need: never reply to an acknowledgement or a thanks. '
         + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE,
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48, description: 'The teammate role (see team_peers).' }),
         kind: StringEnum(MESSAGE_KINDS),
         body: Type.String({ minLength: 1, maxLength: MAX_BODY_BYTES }),
       }, { additionalProperties: false }),
+      /** `kind: "answer"` and the like are information, not a failed send. */
+      prepareArguments: (raw: unknown) => {
+        const args = raw && typeof raw === 'object' ? raw as Record<string, unknown> : undefined;
+        const alias = typeof args?.kind === 'string' ? KIND_ALIASES[args.kind.trim().toLowerCase()] : undefined;
+        return (alias ? { ...args, kind: alias } : raw) as any;
+      },
       renderShell: 'self',
       renderCall: (args: any, theme: any, context: any) => context?.isPartial === false ? new Container()
         : row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'TEAM', target: `${args?.kind ?? 'message'} → ${args?.to ?? ''}`, meta: 'sending…' }),
@@ -174,7 +195,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}) });
     registerTools(); toolsOn(true); showMembership();
     announce(identityText(team, role), ctx);
-    store.set(slot => ({ ...slot, autoTurns: 0, pausedNotice: false, beatAt: now() }));
+    store.set(slot => ({ ...slot, wakes: [], heldNotice: false, beatAt: now() }));
     await refreshCompletions();
     return created;
   };
@@ -306,24 +327,39 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     await openTeamPanel(ctx, next);
   };
 
-  const deliver = (ctx: ExtensionContext, message: Incoming): void => {
+  const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs: 'steer' | 'followUp' | 'nextTurn' }): void => {
+    pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } }, options);
+  };
+  const wakeWindowMs = options.wakeWindowMs ?? WAKE_WINDOW_MS;
+  const recentWakes = (): readonly number[] => store.get().wakes.filter(at => now() - at < wakeWindowMs);
+  /** Opens one turn for these messages: all but the last ride along with it. */
+  const wake = (messages: readonly Incoming[]): void => {
+    store.set(slot => ({ ...slot, wakes: [...recentWakes(), now()] }));
+    messages.forEach((message, index) => show(message, index === messages.length - 1
+      ? { triggerTurn: true, deliverAs: 'followUp' }
+      : { triggerTurn: false, deliverAs: 'nextTurn' }));
+  };
+
+  /** Every message arrives now: steered into running work, or waking an idle terminal once for all of them. */
+  const deliver = (ctx: ExtensionContext, messages: readonly Incoming[]): void => {
+    if (!messages.length) return;
+    if (!ctx.isIdle()) { messages.forEach(message => show(message, { triggerTurn: true, deliverAs: 'steer' })); return; }
+    if (recentWakes().length < WAKE_LIMIT && !store.get().held.length) { wake(messages); return; }
+    store.set(slot => ({ ...slot, held: [...slot.held, ...messages] }));
+    if (store.get().heldNotice) return;
+    store.set(slot => ({ ...slot, heldNotice: true }));
+    output(`Team: ${WAKE_LIMIT} teammate wakes in ${Math.max(1, Math.round(wakeWindowMs / 60_000))} minutes. New messages wait and wake this terminal as soon as that window allows, or when you type.`);
+  };
+
+  /** Held messages go out as soon as they can: into running work, or with one wake once the window allows. */
+  const release = (ctx: ExtensionContext): void => {
+    const held = store.get().held;
+    if (!held.length) return;
     const idle = ctx.isIdle();
-    // info asks nothing of the receiver: it is shown now and read with the next
-    // turn. Waking an idle terminal for it mostly bought a turn that restated it.
-    if (idle && message.kind === 'info') {
-      pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } },
-        { triggerTurn: false, deliverAs: 'nextTurn' });
-      return;
-    }
-    // A busy terminal gets it steered into the work already running: no new turn, no wait.
-    const opensTurn = idle && store.get().autoTurns < AUTO_TURN_LIMIT;
-    if (idle && !opensTurn && !store.get().pausedNotice) {
-      store.set(slot => ({ ...slot, pausedNotice: true }));
-      output(`Team: ${AUTO_TURN_LIMIT} teammate turns in a row without you. Messages still arrive but no longer start turns until you type.`);
-    }
-    if (opensTurn) store.set(slot => ({ ...slot, autoTurns: slot.autoTurns + 1 }));
-    pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } },
-      { triggerTurn: opensTurn || !idle, deliverAs: idle ? 'followUp' : 'steer' });
+    if (idle && recentWakes().length >= WAKE_LIMIT) return;
+    store.set(slot => ({ ...slot, held: [], heldNotice: false }));
+    if (idle) wake(held);
+    else held.forEach(message => show(message, { triggerTurn: true, deliverAs: 'steer' }));
   };
 
   const poll = async (): Promise<void> => {
@@ -351,7 +387,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       }
       await refreshCompletions().catch(() => {});
     }
-    for (const message of await session.receive()) deliver(ctx, message);
+    release(ctx);
+    deliver(ctx, await session.receive());
   };
 
   pi.registerCommand('team', {
@@ -477,7 +514,11 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     void queue(() => session.setActivity({ state: 'idle', since: new Date(now()).toISOString(), ...(store.get().focus ? { focus: store.get().focus } : {}) })).catch(() => {});
   });
   pi.on('input', event => {
-    if (event.source === 'interactive') store.set(slot => ({ ...slot, autoTurns: 0, pausedNotice: false }));
+    if (event.source !== 'interactive') return undefined;
+    // The person is here: held messages join the turn they are starting, and the window starts over.
+    const held = store.get().held;
+    store.set(slot => ({ ...slot, wakes: [], held: [], heldNotice: false }));
+    held.forEach(message => show(message, { triggerTurn: false, deliverAs: 'nextTurn' }));
     return undefined;
   });
   pi.on('session_shutdown', async (event, ctx) => {
