@@ -1,3 +1,9 @@
+## [0.9.2](https://github.com/prjct-app/pi-team/compare/v0.9.1...v0.9.2) (2026-10-01)
+
+### Bug Fixes
+
+* every team message wakes an idle teammate ([#64](https://github.com/prjct-app/pi-team/issues/64)) ([765aca3](https://github.com/prjct-app/pi-team/commit/765aca35a7755d4c9d920e0534cad9654db03a20)), closes [#61](https://github.com/prjct-app/pi-team/issues/61)
+
 ## [0.9.1](https://github.com/prjct-app/pi-team/compare/v0.9.0...v0.9.1) (2026-09-29)
 
 ### Bug Fixes
