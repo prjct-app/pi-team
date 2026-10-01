@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
-import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, setMode, toEnglishInstructions, type Complete } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, setMode, toEnglishInstructions, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
@@ -84,6 +84,7 @@ export function incomingText(message: Incoming): string {
 }
 
 export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}): void {
+  repairToolArgs(pi, { team_message: { aliases: { body: ['message', 'text', 'content'] }, truncate: true } });
   const now = options.now ?? Date.now;
   const session = new TeamSession(new TeamRuntime(new TeamPaths(options.root), now), now);
   const cell: { value: Slot } = { value: { closed: false, toolsRegistered: false, wakes: [], held: [], heldNotice: false, beatAt: 0, teams: [], roles: [] } };
