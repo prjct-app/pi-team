@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { WAKE_LIMIT, WAKE_WINDOW_MS, installTeam } from '../src/index.ts';
+import { WAKE_LIMIT, installTeam, type InstallTeamOptions } from '../src/index.ts';
 import { parseTeamCommand } from '../src/commands/team-command.ts';
 import { SYMBOL } from '@prjct.app/pi-tui-kit';
 
 type Sent = { readonly content: string; readonly options: { readonly triggerTurn?: boolean; readonly deliverAs?: string } };
 
 /** One simulated Pi terminal over a shared store. */
-function terminal(root: string, sessionId: string, entries: unknown[] = [], now: () => number = Date.now) {
+function terminal(root: string, sessionId: string, entries: unknown[] = [], now: () => number = Date.now, extra: Partial<InstallTeamOptions> = {}) {
   const handlers = new Map<string, any>(); const commands = new Map<string, any>(); const tools = new Map<string, any>();
   const active: string[] = ['read', 'bash']; const notices: string[] = []; const sent: Sent[] = []; const identities: Sent[] = []; const status = { text: undefined as string | undefined };
   const idle = { value: true };
@@ -32,7 +32,7 @@ function terminal(root: string, sessionId: string, entries: unknown[] = [], now:
     appendEntry: (customType: string, data: unknown) => entries.push({ type: 'custom', customType, data }),
     registerMessageRenderer() {},
   } as unknown as ExtensionAPI;
-  installTeam(api, { root, pollMs: 10, heartbeatMs: 100, now, complete: async (_s, user) => user });
+  installTeam(api, { root, pollMs: 10, heartbeatMs: 100, now, complete: async (_s, user) => user, ...extra });
   return {
     active, notices, sent, identities, status, idle, entries, tools, root, confirms,
     command: (s: string) => commands.get('team').handler(s, ctx),
@@ -47,8 +47,8 @@ function terminal(root: string, sessionId: string, entries: unknown[] = [], now:
 async function setup(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-'));
   const open: ReturnType<typeof terminal>[] = [];
-  const make = async (session: string, entries: unknown[] = [], now?: () => number) => {
-    const term = terminal(root, session, entries, now); open.push(term); await term.emit('session_start', { reason: 'startup' }); return term;
+  const make = async (session: string, entries: unknown[] = [], now?: () => number, extra: Partial<InstallTeamOptions> = {}) => {
+    const term = terminal(root, session, entries, now, extra); open.push(term); await term.emit('session_start', { reason: 'startup' }); return term;
   };
   t.after(async () => {
     for (const term of open) await term.emit('session_shutdown', { reason: 'quit' });
@@ -57,7 +57,7 @@ async function setup(t: TestContext) {
   return make;
 }
 
-async function until(check: () => boolean, ms = 2000, refresh?: () => Promise<void>): Promise<void> {
+async function until(check: () => boolean, ms = 10_000, refresh?: () => Promise<void>): Promise<void> {
   const start = Date.now();
   await refresh?.();
   while (!check()) {
@@ -184,9 +184,9 @@ test('reload keeps the role: it is released on shutdown and taken back on start'
 
 test('teammates cannot ping-pong: past the wake limit messages wait for the window, never for good', async (t) => {
   const make = await setup(t);
-  const clock = { at: Date.now() };
-  const now = () => clock.at;
-  const a = await make('s-a', [], now); const b = await make('s-b', [], now);
+  // A short window on the real clock: moving a shared clock ahead would also expire presence leases.
+  const windowMs = 5_000;
+  const a = await make('s-a', [], undefined, { wakeWindowMs: windowMs }); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
   for (const index of Array.from({ length: WAKE_LIMIT }, (_, i) => i)) {
     await b.tool('team_message', { to: 'backend', kind: 'info', body: `update ${index}` });
@@ -200,8 +200,7 @@ test('teammates cannot ping-pong: past the wake limit messages wait for the wind
   await new Promise(resolve => setTimeout(resolve, 60));
   assert.equal(a.sent.length, WAKE_LIMIT);
   // The window passes: both go out with a single wake, in order.
-  clock.at += WAKE_WINDOW_MS;
-  await until(() => a.sent.length === WAKE_LIMIT + 2);
+  await until(() => a.sent.length === WAKE_LIMIT + 2, windowMs + 5_000);
   assert.match(a.sent[WAKE_LIMIT]!.content, /held 1/);
   assert.deepEqual(a.sent[WAKE_LIMIT]!.options, { triggerTurn: false, deliverAs: 'nextTurn' });
   assert.deepEqual(a.sent[WAKE_LIMIT + 1]!.options, { triggerTurn: true, deliverAs: 'followUp' });
@@ -209,8 +208,7 @@ test('teammates cannot ping-pong: past the wake limit messages wait for the wind
 
 test('held messages join the turn the person starts, and a busy terminal gets them steered in', async (t) => {
   const make = await setup(t);
-  const clock = { at: Date.now() };
-  const a = await make('s-a', [], () => clock.at); const b = await make('s-b', [], () => clock.at);
+  const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
   for (const index of Array.from({ length: WAKE_LIMIT }, (_, i) => i)) {
     await b.tool('team_message', { to: 'backend', kind: 'info', body: `update ${index}` });

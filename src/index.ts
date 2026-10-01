@@ -19,6 +19,8 @@ export type InstallTeamOptions = {
   readonly now?: () => number;
   /** Rewrites what the person types in /team send into English. Defaults to the cheapest reachable model. */
   readonly complete?: Complete;
+  /** The window WAKE_LIMIT counts wakes in; defaults to WAKE_WINDOW_MS. */
+  readonly wakeWindowMs?: number;
 };
 
 const ENTRY = 'team-membership';
@@ -328,7 +330,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs: 'steer' | 'followUp' | 'nextTurn' }): void => {
     pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } }, options);
   };
-  const recentWakes = (): readonly number[] => store.get().wakes.filter(at => now() - at < WAKE_WINDOW_MS);
+  const wakeWindowMs = options.wakeWindowMs ?? WAKE_WINDOW_MS;
+  const recentWakes = (): readonly number[] => store.get().wakes.filter(at => now() - at < wakeWindowMs);
   /** Opens one turn for these messages: all but the last ride along with it. */
   const wake = (messages: readonly Incoming[]): void => {
     store.set(slot => ({ ...slot, wakes: [...recentWakes(), now()] }));
@@ -345,7 +348,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     store.set(slot => ({ ...slot, held: [...slot.held, ...messages] }));
     if (store.get().heldNotice) return;
     store.set(slot => ({ ...slot, heldNotice: true }));
-    output(`Team: ${WAKE_LIMIT} teammate wakes in ${WAKE_WINDOW_MS / 60_000} minutes. New messages wait and wake this terminal as soon as that window allows, or when you type.`);
+    output(`Team: ${WAKE_LIMIT} teammate wakes in ${Math.max(1, Math.round(wakeWindowMs / 60_000))} minutes. New messages wait and wake this terminal as soon as that window allows, or when you type.`);
   };
 
   /** Held messages go out as soon as they can: into running work, or with one wake once the window allows. */
