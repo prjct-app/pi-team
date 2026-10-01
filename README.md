@@ -61,7 +61,8 @@ Earlier versions had requests that waited for a correlated result, with a queue 
 - **Delivered now or refused now.** If the teammate is online, the message arrives within a second. If it is working, the message is steered into the running turn. If it is idle, the message opens a turn. If it is offline, the send fails straight away, and nothing is kept for later.
 - **No request/result.** A question may get an answer later, as another message. Nothing tracks it or blocks on it.
 - **Visible activity and full traceability.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). Every team keeps a timeline with exact times: joins and leaves, who started working on what, who went idle, every message (from → to, kind, text) and every send refused because the recipient was offline. The `/team` panel shows all of it, so a stalled terminal is obvious.
-- **No ping-pong.** After 6 turns opened by teammates without you typing, messages still show up but stop opening turns, until you type something.
+- **Every kind wakes.** `info`, `question` and `handoff` all arrive now and open a turn in an idle terminal. A kind the model invents (`answer`, `reply`, `request`…) is read as the closest real one instead of failing the send.
+- **No ping-pong.** Teammates can open at most 6 turns in an idle terminal within 10 minutes. Messages past that wait, and go out with a single wake as soon as the window allows, or with the turn you start when you type. A busy terminal is never held: messages are steered into its work.
 
 ## Identity
 
