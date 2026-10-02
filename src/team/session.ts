@@ -467,7 +467,7 @@ export class TeamSession {
     bounded(body, MAX_BODY_BYTES, 'Message');
     const target = (await this.teammates(joined.teamId)).find(mate => mate.role === to);
     const refusal = !target ? `No "${to}" in team ${joined.team}.`
-      : !target.online ? `${to} is offline, so nothing was sent. Do not wait for them: carry on with your own work.` : undefined;
+      : !target.online ? `${to} is offline, so nothing was sent. team_peers shows who is online. Do not wait for them: carry on with your own work.` : undefined;
     if (refusal) {
       await this.record(joined.teamId, { type: 'refused', by: joined.membership.memberId, to: target?.id ?? to, kind, text: target ? 'offline' : 'no such role' });
       throw new Error(refusal);
