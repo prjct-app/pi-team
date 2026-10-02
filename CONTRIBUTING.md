@@ -20,3 +20,9 @@ Follow [docs/package.md](docs/package.md) and its versioned official references.
 ## Releases
 
 Accumulate reviewed changes on `develop`. When the batch is ready, promote `develop` to `main` through one authorized pull request; that single merge automatically publishes one grouped release to npm. Use conventional commit messages and read [Grouped releases](docs/releases.md) before promotion. The workflow manages versions and authenticates with npm through OIDC.
+
+## Runtime security audit
+
+CI audits an isolated installation of the package’s normal and optional runtime dependencies, with host peers suppressed exactly as in `pi install`. Development tools and the Pi-supplied SDK are outside this package’s audit boundary. Installation or audit findings in the package’s own runtime graph still fail CI.
+
+The Pi 1.0.0 development host currently pins a vulnerable `brace-expansion` through its shrinkwrap. Track that upstream host limitation separately; passing this package audit does not claim that the host is vulnerability-free.
