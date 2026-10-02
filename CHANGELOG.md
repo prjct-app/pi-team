@@ -1,3 +1,12 @@
+## [0.9.4](https://github.com/prjct-app/pi-team/compare/v0.9.3...v0.9.4) (2026-10-02)
+
+### Bug Fixes
+
+* install the published TUI dependency in packages and CI ([8394c00](https://github.com/prjct-app/pi-team/commit/8394c00ac0ad6889d0733488d1b23eec9d81f68c))
+* prepare public packages and automatic runtime dependencies ([5ba4178](https://github.com/prjct-app/pi-team/commit/5ba41789a23b6c2cbde8dccee7bbc3a472c75af5))
+* resolve public lockfiles from npm instead of local symlinks ([9458932](https://github.com/prjct-app/pi-team/commit/9458932eedb0e80996776939c00155bfbf4f1ea9))
+* validate Pi runtime dependencies without auditing supplied host peers ([97ca331](https://github.com/prjct-app/pi-team/commit/97ca331914d189e72158dc48e29ff6f4cf19339e))
+
 ## [0.9.2](https://github.com/prjct-app/pi-team/compare/v0.9.1...v0.9.2) (2026-10-01)
 
 ### Bug Fixes
