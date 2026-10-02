@@ -20,7 +20,7 @@
     "extensions": [
       "./index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/prjct-app/pi-clipboard/main/docs/covers/pi-team.png"
+    "image": "https://raw.githubusercontent.com/prjct-app/pi-team/main/docs/cover.png"
   },
   "scripts": {
     "build": "rm -rf build && mkdir -p build && npm pack --ignore-scripts --pack-destination build >/dev/null && tar -xzf build/*.tgz -C build --strip-components=1 && rm -f build/*.tgz",
@@ -65,13 +65,12 @@
     "index.ts",
     "src",
     "docs",
-    "!docs/cover.png",
     "README.md",
     "CONTRIBUTING.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
   "dependencies": {
-    "@prjct.app/pi-tui-kit": "^0.3.0"
+    "@prjct.app/pi-tui-kit": "^0.3.1"
   }
 }
