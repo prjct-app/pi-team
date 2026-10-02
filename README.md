@@ -1,5 +1,7 @@
 # pi-team
 
+[![pi-team — for PI Agent](https://raw.githubusercontent.com/prjct-app/pi-team/main/docs/cover.png)](https://pi.dev)
+
 Connect independent Pi terminals into a named team so they can talk to each other.
 
 You open the terminals and give each a role. Each one keeps its own session, model, cwd and tools, and does its own work, with its own subagents. `pi-team` only lets them see each other and exchange messages. Nothing is queued and nobody waits: a message is delivered now or refused now.
