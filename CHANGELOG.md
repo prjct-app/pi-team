@@ -1,3 +1,9 @@
+# 0.9.8
+
+- Wake idle teammates for answers and findings; remove the six-turn throttle and held queue.
+- Deliver complete batches and role identity to automatic SDK turns without typed input.
+- Verify real SDK delivery after nine automatic replies and while the receiver is busy.
+
 ## [0.9.7](https://github.com/prjct-app/pi-team/compare/v0.9.6...v0.9.7) (2026-10-06)
 
 ### Bug Fixes

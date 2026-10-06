@@ -19,21 +19,12 @@ export type InstallTeamOptions = {
   readonly now?: () => number;
   /** Legacy completion injection; message delivery now preserves original wording. */
   readonly complete?: Complete;
-  /** The window WAKE_LIMIT counts wakes in; defaults to WAKE_WINDOW_MS. */
-  readonly wakeWindowMs?: number;
 };
 
 const ENTRY = 'team-membership';
 const TOOLS = ['team_peers', 'team_message'];
 const IDENTITY = 'team-identity';
 const LEFT = 'You are no longer in a team: team_peers and team_message are gone, and earlier team context no longer applies.';
-/**
- * Turns teammates may open in an idle terminal within WAKE_WINDOW_MS. Stops two
- * agents ping-ponging; never stops the team for good: messages past the limit
- * wait and wake the terminal as soon as the window allows, or when the person types.
- */
-export const WAKE_LIMIT = 6;
-export const WAKE_WINDOW_MS = 10 * 60_000;
 /** Kinds models reach for that are not ours: an answer is information, a task is a handoff. */
 const KIND_ALIASES: Readonly<Record<string, string>> = {
   answer: 'info', reply: 'info', ack: 'info', update: 'info', fyi: 'info', status: 'info', result: 'info',
@@ -55,11 +46,6 @@ type Slot = {
   readonly timer?: ReturnType<typeof setInterval>;
   readonly closed: boolean;
   readonly toolsRegistered: boolean;
-  /** When teammates last opened a turn here, within the window. */
-  readonly wakes: readonly number[];
-  /** Messages past the wake limit, waiting for the window or the person. */
-  readonly held: readonly Incoming[];
-  readonly heldNotice: boolean;
   readonly beatAt: number;
   readonly focus?: string;
   readonly teams: readonly string[];
@@ -87,7 +73,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   repairToolArgs(pi, { team_message: { aliases: { body: ['message', 'text', 'content'] }, truncate: true } });
   const now = options.now ?? Date.now;
   const session = new TeamSession(new TeamRuntime(new TeamPaths(options.root), now), now);
-  const cell: { value: Slot } = { value: { closed: false, toolsRegistered: false, wakes: [], held: [], heldNotice: false, beatAt: 0, teams: [], roles: [] } };
+  const cell: { value: Slot } = { value: { closed: false, toolsRegistered: false, beatAt: 0, teams: [], roles: [] } };
   const store = { get: (): Slot => cell.value, set: (next: (current: Slot) => Slot): void => { cell.value = next(cell.value); } };
   const serial = { value: Promise.resolve() as Promise<unknown> };
   const queue = <T>(action: () => Promise<T>): Promise<T> => {
@@ -142,7 +128,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       description: 'Send a message to another Pi terminal on your team, by role. It is delivered now or refused now (offline): nothing is queued, nothing is a task you hand off and wait for. '
         + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
         + 'Kinds: info to share a finding or an answer, question to ask (they may answer later with team_message), handoff to pass them something they will own. '
-        + 'Info reaches their next turn without waking an idle terminal. Questions and handoffs wake them if idle. Send only a finding they need, a question, or a handoff. Never send progress updates or check-ins, and never reply to an acknowledgement or a thanks. '
+        + 'Every message, including an answer or finding, wakes an idle teammate and reaches a busy teammate through steering. Send only a finding they need, a question, or a handoff. Never send progress updates or check-ins, and never reply to an acknowledgement or a thanks. '
         + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE
         + ' Use full sentences with normal spacing: never glue words to numbers or to each other.',
       parameters: Type.Object({
@@ -197,7 +183,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}) });
     registerTools(); toolsOn(true); showMembership();
     announce(identityText(team, role), ctx);
-    store.set(slot => ({ ...slot, wakes: [], heldNotice: false, beatAt: now() }));
+    store.set(slot => ({ ...slot, beatAt: now() }));
     await refreshCompletions();
     return created;
   };
@@ -214,7 +200,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const journaled = [...entries].reverse().find(entry => entry.type === 'custom_message' && entry.customType === IDENTITY)?.content;
     if ((identity.last ?? journaled) === text) return;
     identity.last = text;
-    pi.sendMessage({ customType: IDENTITY, content: text, display: false }, { triggerTurn: false, deliverAs: 'nextTurn' });
+    pi.sendMessage({ customType: IDENTITY, content: text, display: false }, { triggerTurn: false, deliverAs: 'followUp' });
   };
   const identityText = (team: string, role: string): string =>
     `You are "${role}" in team "${team}", one of several independent Pi terminals. Do your own work with your own tools and subagents. Teammates are reachable with team_peers and team_message; never wait on them.`;
@@ -332,39 +318,16 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs: 'steer' | 'followUp' | 'nextTurn' }): void => {
     pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } }, options);
   };
-  const wakeWindowMs = options.wakeWindowMs ?? WAKE_WINDOW_MS;
-  const recentWakes = (): readonly number[] => store.get().wakes.filter(at => now() - at < wakeWindowMs);
-  /** Opens one turn for these messages: all but the last ride along with it. */
-  const wake = (messages: readonly Incoming[]): void => {
-    store.set(slot => ({ ...slot, wakes: [...recentWakes(), now()] }));
-    messages.forEach((message, index) => show(message, index === messages.length - 1
-      ? { triggerTurn: true, deliverAs: 'followUp' }
-      : { triggerTurn: false, deliverAs: 'nextTurn' }));
-  };
-
-  /** Information never opens a turn. Only questions and handoffs spend the wake budget. */
+  /** Deliver a complete batch through Pi; every kind can unblock autonomous work. */
   const deliver = (ctx: ExtensionContext, messages: readonly Incoming[]): void => {
     if (!messages.length) return;
-    if (!ctx.isIdle()) { messages.forEach(message => show(message, { triggerTurn: message.kind !== 'info', deliverAs: 'steer' })); return; }
-    messages.filter(message => message.kind === 'info').forEach(message => show(message, { triggerTurn: false, deliverAs: 'nextTurn' }));
-    const actionable = messages.filter(message => message.kind !== 'info');
-    if (!actionable.length) return;
-    if (recentWakes().length < WAKE_LIMIT && !store.get().held.length) { wake(actionable); return; }
-    store.set(slot => ({ ...slot, held: [...slot.held, ...actionable] }));
-    if (store.get().heldNotice) return;
-    store.set(slot => ({ ...slot, heldNotice: true }));
-    output(`Team: ${WAKE_LIMIT} teammate wakes in ${Math.max(1, Math.round(wakeWindowMs / 60_000))} minutes. New messages wait and wake this terminal as soon as that window allows, or when you type.`);
-  };
-
-  /** Held messages go out as soon as they can: into running work, or with one wake once the window allows. */
-  const release = (ctx: ExtensionContext): void => {
-    const held = store.get().held;
-    if (!held.length) return;
     const idle = ctx.isIdle();
-    if (idle && recentWakes().length >= WAKE_LIMIT) return;
-    store.set(slot => ({ ...slot, held: [], heldNotice: false }));
-    if (idle) wake(held);
-    else held.forEach(message => show(message, { triggerTurn: true, deliverAs: 'steer' }));
+    messages.forEach((message, index) => show(message, {
+      // An idle batch appends its earlier messages immediately, then opens one turn.
+      // nextTurn waits for a typed prompt and must never carry autonomous work.
+      triggerTurn: !idle || index === messages.length - 1,
+      deliverAs: idle ? 'followUp' : 'steer',
+    }));
   };
 
   const poll = async (): Promise<void> => {
@@ -392,7 +355,6 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       }
       await refreshCompletions().catch(() => {});
     }
-    release(ctx);
     deliver(ctx, await session.receive());
   };
 
@@ -517,14 +479,6 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   pi.on('agent_end', () => {
     if (!session.current()) return;
     void queue(() => session.setActivity({ state: 'idle', since: new Date(now()).toISOString(), ...(store.get().focus ? { focus: store.get().focus } : {}) })).catch(() => {});
-  });
-  pi.on('input', event => {
-    if (event.source !== 'interactive') return undefined;
-    // The person is here: held messages join the turn they are starting, and the window starts over.
-    const held = store.get().held;
-    store.set(slot => ({ ...slot, wakes: [], held: [], heldNotice: false }));
-    held.forEach(message => show(message, { triggerTurn: false, deliverAs: 'nextTurn' }));
-    return undefined;
   });
   pi.on('session_shutdown', async (event, ctx) => {
     const timer = store.get().timer;
