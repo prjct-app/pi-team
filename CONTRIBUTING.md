@@ -24,4 +24,3 @@ Accumulate reviewed changes on `develop`. When the batch is ready, promote `deve
 ## Runtime security audit
 
 CI audits an isolated installation of the package’s normal and optional runtime dependencies, with host peers suppressed exactly as in `pi install`. Development tools and the Pi-supplied SDK are outside this package’s audit boundary. Installation or audit findings in the package’s own runtime graph still fail CI.
-
