@@ -1,3 +1,9 @@
+## [0.9.7](https://github.com/prjct-app/pi-team/compare/v0.9.6...v0.9.7) (2026-10-06)
+
+### Bug Fixes
+
+* preserve team messages and stop informational wakeups ([fffc149](https://github.com/prjct-app/pi-team/commit/fffc1490a73105e3cba8dbea7173008f8ef246b8))
+
 ## [0.9.6](https://github.com/prjct-app/pi-team/compare/v0.9.5...v0.9.6) (2026-10-06)
 
 ### Bug Fixes
