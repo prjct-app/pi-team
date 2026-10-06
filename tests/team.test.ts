@@ -119,11 +119,29 @@ test('two terminals join by name, see each other working, and a message arrives 
   await until(() => b.sent.length === 1);
   assert.deepEqual(b.sent[0]!.options, { triggerTurn: true, deliverAs: 'followUp' });
 
-  // Idle recipient: info wakes it too; every message arrives now.
+  // Idle recipient: info is visible, but does not open another turn.
   await a.tool('team_message', { to: 'reviewer', kind: 'info', body: '401, see src/auth.ts' });
   await until(() => b.sent.length === 2);
   assert.match(b.sent[1]!.content, /Team message from backend \(info/);
-  assert.deepEqual(b.sent[1]!.options, { triggerTurn: true, deliverAs: 'followUp' });
+  assert.deepEqual(b.sent[1]!.options, { triggerTurn: false, deliverAs: 'nextTurn' });
+});
+
+test('information never spends the wake budget, while handoffs still wake', async t => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  for (const index of Array.from({ length: WAKE_LIMIT + 2 }, (_, i) => i)) {
+    await b.tool('team_message', { to: 'backend', kind: 'info', body: `finding ${index}` });
+    await until(() => a.sent.length === index + 1);
+  }
+  assert.ok(a.sent.every(message => !message.options.triggerTurn));
+  await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'Please own the retry fix.' });
+  await until(() => a.sent.length === WAKE_LIMIT + 3);
+  assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'followUp' });
+  a.idle.value = false;
+  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'The repro is in tests/retry.ts.' });
+  await until(() => a.sent.length === WAKE_LIMIT + 4);
+  assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: false, deliverAs: 'steer' });
 });
 
 test('a long message is delivered whole and the model sees no length budget to squeeze into', async (t) => {
@@ -204,13 +222,13 @@ test('teammates cannot ping-pong: past the wake limit messages wait for the wind
   const a = await make('s-a', [], undefined, { wakeWindowMs: windowMs }); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
   for (const index of Array.from({ length: WAKE_LIMIT }, (_, i) => i)) {
-    await b.tool('team_message', { to: 'backend', kind: 'info', body: `update ${index}` });
+    await b.tool('team_message', { to: 'backend', kind: 'question', body: `question ${index}` });
     await until(() => a.sent.length === index + 1);
   }
   assert.ok(a.sent.every(s => s.options.triggerTurn && s.options.deliverAs === 'followUp'));
   // Over the limit: held, with one notice, and nothing sent yet.
   await b.tool('team_message', { to: 'backend', kind: 'question', body: 'held 1' });
-  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'held 2' });
+  await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'held 2' });
   await until(() => a.notices.some(n => /wake this terminal as soon as that window allows/.test(n)));
   await new Promise(resolve => setTimeout(resolve, 60));
   assert.equal(a.sent.length, WAKE_LIMIT);
@@ -226,16 +244,16 @@ test('held messages join the turn the person starts, and a busy terminal gets th
   const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
   for (const index of Array.from({ length: WAKE_LIMIT }, (_, i) => i)) {
-    await b.tool('team_message', { to: 'backend', kind: 'info', body: `update ${index}` });
+    await b.tool('team_message', { to: 'backend', kind: 'question', body: `question ${index}` });
     await until(() => a.sent.length === index + 1);
   }
-  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'held for the person' });
+  await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'held for the person' });
   await until(() => a.notices.some(n => /window allows/.test(n)));
   await a.emit('input', { source: 'interactive', text: 'go on' });
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: false, deliverAs: 'nextTurn' });
   assert.match(a.sent.at(-1)!.content, /held for the person/);
   // The person typed, so the window starts over: the next message wakes again.
-  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'after you typed' });
+  await b.tool('team_message', { to: 'backend', kind: 'question', body: 'after you typed' });
   await until(() => a.sent.length === WAKE_LIMIT + 2);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'followUp' });
   // A busy terminal is never held: messages are steered into its work.

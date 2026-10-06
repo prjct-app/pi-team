@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
-import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, setMode, toEnglishInstructions, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, openPanel, row, setMode, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
@@ -17,7 +17,7 @@ export type InstallTeamOptions = {
   /** How often presence is renewed and a lost membership (removed, deleted, taken) is noticed. */
   readonly heartbeatMs?: number;
   readonly now?: () => number;
-  /** Rewrites what the person types in /team send into English. Defaults to the cheapest reachable model. */
+  /** Legacy completion injection; message delivery now preserves original wording. */
   readonly complete?: Complete;
   /** The window WAKE_LIMIT counts wakes in; defaults to WAKE_WINDOW_MS. */
   readonly wakeWindowMs?: number;
@@ -142,7 +142,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       description: 'Send a message to another Pi terminal on your team, by role. It is delivered now or refused now (offline): nothing is queued, nothing is a task you hand off and wait for. '
         + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
         + 'Kinds: info to share a finding or an answer, question to ask (they may answer later with team_message), handoff to pass them something they will own. '
-        + 'Every kind reaches them now and wakes them if idle, so send only what they need: a finding they need, a question, or a handoff. Never send progress updates or check-ins, and never reply to an acknowledgement or a thanks. '
+        + 'Info reaches their next turn without waking an idle terminal. Questions and handoffs wake them if idle. Send only a finding they need, a question, or a handoff. Never send progress updates or check-ins, and never reply to an acknowledgement or a thanks. '
         + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE
         + ' Use full sentences with normal spacing: never glue words to numbers or to each other.',
       parameters: Type.Object({
@@ -239,7 +239,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return plan.takeFrom ? `Took over ${role} in team ${team}.` : `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
   };
   const sendFromPerson = async (ctx: ExtensionContext, to: string, text: string): Promise<void> => {
-    const body = await toEnglishInstructions(text, options.complete ?? sessionComplete(ctx));
+    const body = text;
     // A handoff, so it wakes the receiver: the person expects it acted on.
     await session.send(to, 'handoff', `From the person at this terminal: ${body}`);
   };
@@ -342,12 +342,15 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       : { triggerTurn: false, deliverAs: 'nextTurn' }));
   };
 
-  /** Every message arrives now: steered into running work, or waking an idle terminal once for all of them. */
+  /** Information never opens a turn. Only questions and handoffs spend the wake budget. */
   const deliver = (ctx: ExtensionContext, messages: readonly Incoming[]): void => {
     if (!messages.length) return;
-    if (!ctx.isIdle()) { messages.forEach(message => show(message, { triggerTurn: true, deliverAs: 'steer' })); return; }
-    if (recentWakes().length < WAKE_LIMIT && !store.get().held.length) { wake(messages); return; }
-    store.set(slot => ({ ...slot, held: [...slot.held, ...messages] }));
+    if (!ctx.isIdle()) { messages.forEach(message => show(message, { triggerTurn: message.kind !== 'info', deliverAs: 'steer' })); return; }
+    messages.filter(message => message.kind === 'info').forEach(message => show(message, { triggerTurn: false, deliverAs: 'nextTurn' }));
+    const actionable = messages.filter(message => message.kind !== 'info');
+    if (!actionable.length) return;
+    if (recentWakes().length < WAKE_LIMIT && !store.get().held.length) { wake(actionable); return; }
+    store.set(slot => ({ ...slot, held: [...slot.held, ...actionable] }));
     if (store.get().heldNotice) return;
     store.set(slot => ({ ...slot, heldNotice: true }));
     output(`Team: ${WAKE_LIMIT} teammate wakes in ${Math.max(1, Math.round(wakeWindowMs / 60_000))} minutes. New messages wait and wake this terminal as soon as that window allows, or when you type.`);
