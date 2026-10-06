@@ -126,6 +126,21 @@ test('two terminals join by name, see each other working, and a message arrives 
   assert.deepEqual(b.sent[1]!.options, { triggerTurn: true, deliverAs: 'followUp' });
 });
 
+test('a long message is delivered whole and the model sees no length budget to squeeze into', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  const tool = b.tools.get('team_message');
+  assert.equal(tool.parameters.properties.body.maxLength, undefined);
+  assert.match(tool.description, /normal spacing/);
+  assert.match(tool.description, /Never send progress updates or check-ins/);
+  const body = 'The login endpoint returns 401 for a bad password and 423 after five failures. '.repeat(120);
+  assert.ok(body.length > 8_000);
+  await b.tool('team_message', { to: 'backend', kind: 'info', body });
+  await until(() => a.sent.length === 1);
+  assert.ok(a.sent[0]!.content.includes(body.trim()));
+});
+
 test('a kind the model made up is read as ours instead of failing the send', async (t) => {
   const make = await setup(t);
   const a = await make('s-a'); const b = await make('s-b');

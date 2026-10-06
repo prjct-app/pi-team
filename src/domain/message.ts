@@ -2,7 +2,8 @@ import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { EntityIdSchema, TeamIdSchema, TimestampSchema, timestampMillis } from './team.ts';
 
-export const MAX_MESSAGE_BODY_BYTES = 8 * 1024;
+/** A bound for the message store, not a writing budget for the model. */
+export const MAX_MESSAGE_BODY_BYTES = 32 * 1024;
 export const MAX_MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type MessageKind = 'info' | 'question' | 'proposal' | 'handoff' | 'blocker' | 'request' | 'reply' | 'cancel';
