@@ -1,3 +1,9 @@
+## [0.9.8](https://github.com/prjct-app/pi-team/compare/v0.9.7...v0.9.8) (2026-10-06)
+
+### Bug Fixes
+
+* deliver every team message to autonomous SDK turns ([296c0da](https://github.com/prjct-app/pi-team/commit/296c0da33da7a870888881168b8079bc94c29dd0))
+
 # 0.9.8
 
 - Wake idle teammates for answers and findings; remove the six-turn throttle and held queue.
