@@ -7,7 +7,7 @@
 
 ## Official Pi API compliance
 
-- [ ] Uses only APIs documented by Pi 0.85.1
+- [ ] Uses only APIs documented by Pi 1.0.4
 - [ ] No internal `dist/` imports or prototype patches
 - [ ] Pi-provided packages remain peer dependencies
 

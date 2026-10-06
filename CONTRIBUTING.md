@@ -5,7 +5,7 @@
 - Only grouped promotion pull requests from `develop` may target `main`; use a merge commit so semantic-release can analyze every included conventional commit.
 - Deliver changes through a pull request using `.github/pull_request_template.md`.
 - Use English for code, documentation, tests, issues, and pull requests.
-- Use strict TypeScript and only APIs documented by Pi 0.85.1.
+- Use strict TypeScript and only APIs documented by Pi 1.0.4.
 - Use immutable values: `npm run check` fails on any `let` under `src/`.
 - Do not import host internals, monkey-patch prototypes, or access real credentials, sessions, or user configuration in tests.
 - Keep runtime dependencies in `dependencies`; list Pi-provided packages in `peerDependencies` with a `*` range.
@@ -24,5 +24,3 @@ Accumulate reviewed changes on `develop`. When the batch is ready, promote `deve
 ## Runtime security audit
 
 CI audits an isolated installation of the package’s normal and optional runtime dependencies, with host peers suppressed exactly as in `pi install`. Development tools and the Pi-supplied SDK are outside this package’s audit boundary. Installation or audit findings in the package’s own runtime graph still fail CI.
-
-The Pi 1.0.0 development host currently pins a vulnerable `brace-expansion` through its shrinkwrap. Track that upstream host limitation separately; passing this package audit does not claim that the host is vulnerability-free.
