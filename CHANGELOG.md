@@ -1,3 +1,9 @@
+## [0.9.5](https://github.com/prjct-app/pi-team/compare/v0.9.4...v0.9.5) (2026-10-06)
+
+### Bug Fixes
+
+* **team_message:** no visible length cap; ask for normal spacing ([8daecf5](https://github.com/prjct-app/pi-team/commit/8daecf57e2738f65f7944a36c771a34d9ccb3ad8))
+
 ## [0.9.4](https://github.com/prjct-app/pi-team/compare/v0.9.3...v0.9.4) (2026-10-02)
 
 ### Bug Fixes
