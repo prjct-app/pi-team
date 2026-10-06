@@ -5,6 +5,7 @@ import { Type } from 'typebox';
 import { Value } from 'typebox/value';
 import { EntityIdSchema, TEAM_ID_PATTERN, TimestampSchema } from '../domain/team.ts';
 import type { Member } from '../domain/member.ts';
+import { MAX_MESSAGE_BODY_BYTES } from '../domain/message.ts';
 import type { Membership } from '../runtime/membership.ts';
 import type { TeamRuntime } from '../runtime/team-runtime.ts';
 import { ensurePrivateDirectory, readJson, replaceAtomicJson, withStorageLock } from '../storage/atomic.ts';
@@ -115,7 +116,12 @@ export type Saved = { readonly teamId: string; readonly memberId: string; readon
 
 /** A message that is not picked up within this window is dropped, never replayed later. */
 const MESSAGE_TTL_MS = 10 * 60 * 1000;
-export const MAX_BODY_BYTES = 4000;
+/**
+ * The store's bound, never shown to the model. The 4,000 cap it saw in the
+ * schema pushed it to squeeze messages until words ran together
+ * ("wired8000 ownedLANDING"), and teammates copied that shorthand.
+ */
+export const MAX_BODY_BYTES = MAX_MESSAGE_BODY_BYTES;
 const newTeamId = (): string => `t-${randomUUID()}`;
 
 /**

@@ -35,7 +35,7 @@ test('Team v2 domain schemas reject future versions and invalid lifecycle transi
 
 test('message validation uses UTF-8 bytes, bounded TTL, and explicit request correlation', () => {
   assert.doesNotThrow(() => assertEnvelope(envelope('ñ'.repeat(MAX_MESSAGE_BODY_BYTES / 2))));
-  assert.throws(() => assertEnvelope(envelope('ñ'.repeat(MAX_MESSAGE_BODY_BYTES / 2 + 1))), /exceeds 8192 bytes/);
+  assert.throws(() => assertEnvelope(envelope('ñ'.repeat(MAX_MESSAGE_BODY_BYTES / 2 + 1))), new RegExp(`exceeds ${MAX_MESSAGE_BODY_BYTES} bytes`));
   assert.throws(() => assertEnvelope({ ...envelope(), expiresAt: at(24 * 60 * 60 * 1000 + 1_001) }), /within 24 hours/);
   assert.throws(() => assertEnvelope({ ...envelope(), kind: 'request' }), /require requestId/);
   assert.doesNotThrow(() => assertEnvelope({ ...envelope(), kind: 'request', requestId: 'request-1' }));

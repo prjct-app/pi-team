@@ -6,7 +6,7 @@ import { ENGLISH_RULE, SYMBOL, brand, openPanel, sessionComplete, row, setMode, 
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
-import { MAX_BODY_BYTES, MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
+import { MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
 import { ago, clean } from './team/text.ts';
 import { mark, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 
@@ -143,11 +143,12 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
         + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
         + 'Kinds: info to share a finding or an answer, question to ask (they may answer later with team_message), handoff to pass them something they will own. '
         + 'Every kind reaches them now and wakes them if idle, so send only what they need: never reply to an acknowledgement or a thanks. '
-        + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE,
+        + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE
+        + ' Use full sentences with normal spacing: never glue words to numbers or to each other.',
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48, description: 'The teammate role (see team_peers).' }),
         kind: StringEnum(MESSAGE_KINDS),
-        body: Type.String({ minLength: 1, maxLength: MAX_BODY_BYTES }),
+        body: Type.String({ minLength: 1 }),
       }, { additionalProperties: false }),
       /** `kind: "answer"` and the like are information, not a failed send. */
       prepareArguments: (raw: unknown) => {

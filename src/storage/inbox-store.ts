@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import { assertMember, type Member } from '../domain/member.ts';
-import { assertEnvelope, messageExpired, type Envelope } from '../domain/message.ts';
+import { assertEnvelope, MAX_MESSAGE_BODY_BYTES, messageExpired, type Envelope } from '../domain/message.ts';
 import { assertTeam, assertEntityId, assertTeamId } from '../domain/team.ts';
 import {
   createAtomicJson, ensurePrivateDirectory, ensurePrivateTree, jsonFileNames, moveAtomic, readJson, removeAtomic,
@@ -10,7 +10,8 @@ import { TeamPaths } from './paths.ts';
 
 // JSON escaping can expand a valid 8 KiB control-character body to six bytes
 // per input byte, so the record cap must bound metadata without rejecting it.
-const MESSAGE_MAX_BYTES = 64 * 1024;
+/** Room for the largest body with every character JSON-escaped (6 bytes each), plus the envelope. */
+const MESSAGE_MAX_BYTES = 7 * MAX_MESSAGE_BODY_BYTES;
 const TEAM_MAX_BYTES = 32 * 1024;
 const MEMBER_MAX_BYTES = 64 * 1024;
 

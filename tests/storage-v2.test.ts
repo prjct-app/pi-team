@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { Member } from '../src/domain/member.ts';
+import { MAX_MESSAGE_BODY_BYTES } from '../src/domain/message.ts';
 import type { Envelope, Receipt } from '../src/domain/message.ts';
 import type { Team } from '../src/domain/team.ts';
 import { withStorageLock } from '../src/storage/atomic.ts';
@@ -134,15 +135,15 @@ test('inboxes enforce UTF-8 validation, recipient/team quotas, TTL, pagination, 
   assert.equal((await inbox.readPending('shop', 'backend-1', 'message-1'))?.messageId, 'message-1');
 
   await assert.rejects(inbox.enqueue(message('expired-1', 'frontend-1', BASE - 120_000)), /already expired/);
-  await assert.rejects(inbox.enqueue({ ...message('large-1', 'frontend-1'), body: 'ñ'.repeat(4_097) }), /exceeds 8192 bytes/);
+  await assert.rejects(inbox.enqueue({ ...message('large-1', 'frontend-1'), body: 'ñ'.repeat(MAX_MESSAGE_BODY_BYTES / 2 + 1) }), new RegExp(`exceeds ${MAX_MESSAGE_BODY_BYTES} bytes`));
 });
 
-test('every valid 8 KiB body fits the bounded serialized envelope', async (t) => {
+test('every valid body at the size bound fits the bounded serialized envelope', async (t) => {
   const { paths } = await setup(t);
   const inbox = new InboxStore(paths, { now: () => BASE + 1_000 });
-  const escaped = { ...message('escaped-body'), body: '\0'.repeat(8 * 1024) };
+  const escaped = { ...message('escaped-body'), body: '\0'.repeat(MAX_MESSAGE_BODY_BYTES) };
   await inbox.enqueue(escaped);
-  assert.equal((await inbox.readPending('shop', 'backend-1', 'escaped-body'))?.body.length, 8 * 1024);
+  assert.equal((await inbox.readPending('shop', 'backend-1', 'escaped-body'))?.body.length, MAX_MESSAGE_BODY_BYTES);
 });
 
 test('concurrent inbox writes preserve every admitted message and reclaim a dead stale lock', async (t) => {
