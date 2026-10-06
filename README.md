@@ -60,11 +60,11 @@ The tool descriptions tell the agent never to wait on a teammate, to keep workin
 
 Earlier versions had requests that waited for a correlated result, with a queue per member. Agents ended up waiting on each other in chains, nothing advanced, and you could not see where it was stuck. So now:
 
-- **Delivered now or refused now.** If the teammate is online, the message arrives within a second. If it is working, the message is steered into the running turn. If it is idle, information is available on its next turn; questions and handoffs open a turn. If it is offline, the send fails straight away, and nothing is kept for later.
+- **Delivered now or refused now.** If the teammate is online, the message arrives within a second. If it is working, the message is steered into the running turn. If it is idle, every message opens a turn, including answers and findings. If it is offline, the send fails straight away, and nothing is kept for later.
 - **No request/result.** A question may get an answer later, as another message. Nothing tracks it or blocks on it.
 - **Visible activity and full traceability.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). Every team keeps a timeline with exact times: joins and leaves, who started working on what, who went idle, every message (from → to, kind, text) and every send refused because the recipient was offline. The `/team` panel shows all of it, so a stalled terminal is obvious.
-- **Findings without extra turns.** `info` is displayed and saved for the next turn without waking an idle terminal. Only `question` and `handoff` open a turn and spend the wake budget. Never send progress check-ins or acknowledgements. A kind the model invents (`answer`, `reply`, `request`…) is read as the closest real one instead of failing the send.
-- **No ping-pong.** Teammates can open at most 6 turns in an idle terminal within 10 minutes. Messages past that wait, and go out with a single wake as soon as the window allows, or with the turn you start when you type. A busy terminal is never held: messages are steered into its work.
+- **Autonomous continuation.** Every message kind wakes an idle terminal; busy terminals receive steering through the Pi SDK. A batch reaches the same automatic turn in full. There is no six-turn limit and no requirement for a person to type before work continues.
+- **Useful communication.** Send findings, answers, questions, and handoffs. Avoid progress check-ins and acknowledgement loops. The model decides whether a reply adds value. Aliases such as `answer`, `reply`, and `request` retain their meaning without changing delivery.
 
 ## Identity
 

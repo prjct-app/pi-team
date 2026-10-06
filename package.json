@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-team",
-  "version": "0.9.6",
+  "version": "0.9.8",
   "description": "Connect independent Pi terminals into a named team: live presence and activity, and messages that never queue.",
   "type": "module",
   "keywords": [
@@ -26,7 +26,7 @@
     "build": "rm -rf build && mkdir -p build && npm pack --ignore-scripts --pack-destination build >/dev/null && tar -xzf build/*.tgz -C build --strip-components=1 && rm -f build/*.tgz",
     "check": "tsc --noEmit && npm run check:immutable",
     "check:immutable": "! grep -rn '\\blet\\b' src/ || (echo 'Use immutable values: no let bindings in src/' && exit 1)",
-    "test": "node --import tsx --test tests/*.test.ts tests/*.test.mjs",
+    "test": "node --import ./tests/isolate.mjs --import tsx --test tests/*.test.ts tests/*.test.mjs",
     "check:package": "npm pack --dry-run --ignore-scripts",
     "build:pi": "node scripts/build-pi.mjs"
   },
@@ -40,9 +40,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-coding-agent": "1.0.0",
-    "@earendil-works/pi-tui": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.4",
+    "@earendil-works/pi-coding-agent": "1.0.4",
+    "@earendil-works/pi-tui": "1.0.4",
     "@types/node": "^22.19.0",
     "esbuild": "^0.28.1",
     "tsx": "^4.20.0",
@@ -71,6 +71,6 @@
     "CHANGELOG.md"
   ],
   "dependencies": {
-    "@prjct.app/pi-tui-kit": "^0.3.1"
+    "@prjct.app/pi-tui-kit": "^0.3.4"
   }
 }

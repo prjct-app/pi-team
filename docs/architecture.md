@@ -18,7 +18,7 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 - `receive` claims, reads and finishes each pending message exactly once, in creation order.
 - `setActivity` / `teammates` publish and read `teams/<team>/activity/<member>.json` (`working | idle`, since, focus) next to the presence lease, so `/team` and `team_peers` show where each terminal is.
 
-`index.ts` delivers a received message with `sendMessage`. A busy terminal gets it steered into its running turn. An idle one gets a new turn, up to `AUTO_TURN_LIMIT` (6) consecutive teammate-opened turns. After that, messages are shown without triggering a turn until interactive input resets the counter. Delivered content is one header line plus the body; nothing else is added to context.
+`index.ts` delivers every message kind with the public Pi `sendMessage` API. A busy terminal receives steering with `triggerTurn: true`. For an idle batch, earlier messages are appended with `followUp` and no trigger, then the last opens one turn. `nextTurn` is reserved for passive status text because it waits for interactive input. Identity is appended directly so the very first autonomous turn knows its role. No wake counter, rate window, or held-message queue blocks continuation.
 
 ## Panel and timeline
 

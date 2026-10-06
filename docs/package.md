@@ -12,7 +12,7 @@ runtime command names, event names, persisted entry types, or settings keys.
 ## Dependencies
 
 Pi-provided libraries are declared in `peerDependencies` with `*`, as the Pi
-package guide requires, and are not bundled. The exact Pi 0.85.1 devDependencies
+package guide requires, and are not bundled. The exact Pi 1.0.4 devDependencies
 establish the tested baseline; the peer wildcard is not a claim that every Pi
 release is supported. This package has **no runtime dependencies**: storage is
 self-contained.
@@ -36,6 +36,6 @@ Pinned to the tested version rather than the moving main branch:
 - [Extensions](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/extensions.md) — lifecycle, commands, tools, messages, UI
 - [TUI](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/docs/tui.md) — components, rendering, widths
 
-The installed `@earendil-works/pi-coding-agent@0.85.1` ships the same guides under
+The installed `@earendil-works/pi-coding-agent@1.0.4` ships the same guides under
 `docs/`. The [current guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 may describe changes beyond this tested baseline.
