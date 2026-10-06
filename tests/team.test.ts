@@ -133,6 +133,7 @@ test('a long message is delivered whole and the model sees no length budget to s
   const tool = b.tools.get('team_message');
   assert.equal(tool.parameters.properties.body.maxLength, undefined);
   assert.match(tool.description, /normal spacing/);
+  assert.match(tool.description, /Never send progress updates or check-ins/);
   const body = 'The login endpoint returns 401 for a bad password and 423 after five failures. '.repeat(120);
   assert.ok(body.length > 8_000);
   await b.tool('team_message', { to: 'backend', kind: 'info', body });

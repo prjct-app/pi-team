@@ -142,7 +142,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       description: 'Send a message to another Pi terminal on your team, by role. It is delivered now or refused now (offline): nothing is queued, nothing is a task you hand off and wait for. '
         + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
         + 'Kinds: info to share a finding or an answer, question to ask (they may answer later with team_message), handoff to pass them something they will own. '
-        + 'Every kind reaches them now and wakes them if idle, so send only what they need: never reply to an acknowledgement or a thanks. '
+        + 'Every kind reaches them now and wakes them if idle, so send only what they need: a finding they need, a question, or a handoff. Never send progress updates or check-ins, and never reply to an acknowledgement or a thanks. '
         + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE
         + ' Use full sentences with normal spacing: never glue words to numbers or to each other.',
       parameters: Type.Object({
