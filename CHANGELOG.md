@@ -1,3 +1,9 @@
+## [0.9.6](https://github.com/prjct-app/pi-team/compare/v0.9.5...v0.9.6) (2026-10-06)
+
+### Bug Fixes
+
+* **team_message:** send findings, questions and handoffs, never progress check-ins ([ed9829d](https://github.com/prjct-app/pi-team/commit/ed9829d78c6a63f0785d4b91f2ff28bf98a361f7))
+
 ## [0.9.5](https://github.com/prjct-app/pi-team/compare/v0.9.4...v0.9.5) (2026-10-06)
 
 ### Bug Fixes
