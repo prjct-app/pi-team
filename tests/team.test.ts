@@ -13,6 +13,8 @@ type Sent = { readonly content: string; readonly options: { readonly triggerTurn
 /** One simulated Pi terminal over a shared store. */
 function terminal(root: string, sessionId: string, entries: unknown[] = [], now: () => number = Date.now, extra: Partial<InstallTeamOptions> = {}) {
   const handlers = new Map<string, any>(); const commands = new Map<string, any>(); const tools = new Map<string, any>();
+  const renderers: ((name: string, next: () => unknown) => unknown)[] = [];
+  const messageRenderers = new Map<string, any>();
   const active: string[] = ['read', 'bash']; const notices: string[] = []; const sent: Sent[] = []; const identities: Sent[] = []; const status = { text: undefined as string | undefined };
   const idle = { value: true };
   const confirms = { answer: true };
@@ -30,11 +32,14 @@ function terminal(root: string, sessionId: string, entries: unknown[] = [], now:
     setActiveTools: (names: string[]) => active.splice(0, active.length, ...names),
     sendMessage: (m: any, options: any) => (m.customType === 'team-identity' ? identities : sent).push({ content: m.content, options }),
     appendEntry: (customType: string, data: unknown) => entries.push({ type: 'custom', customType, data }),
-    registerMessageRenderer() {},
+    registerMessageRenderer: (name: string, renderer: unknown) => messageRenderers.set(name, renderer),
+    registerToolRenderer: (renderer: (name: string, next: () => unknown) => unknown) => renderers.push(renderer),
   } as unknown as ExtensionAPI;
   installTeam(api, { root, pollMs: 10, heartbeatMs: 100, now, complete: async (_s, user) => user, ...extra });
   return {
     active, notices, sent, identities, status, idle, entries, tools, root, confirms,
+    renderers,
+    messageRenderers,
     command: (s: string) => commands.get('team').handler(s, ctx),
     commandWith: (s: string, extra: { mode?: string; ui?: Record<string, unknown> }) =>
       commands.get('team').handler(s, { ...ctx, ...extra, ui: { ...ctx.ui, setEditorText() {}, ...extra.ui } }),
@@ -84,6 +89,32 @@ test('startup is inert: no tools, no status, no prompt change until join', async
   assert.deepEqual(a.active, ['read', 'bash']);
   assert.equal(a.status.text, undefined);
   assert.equal(await a.emit('before_agent_start', { prompt: 'hi', systemPrompt: 'base' }), undefined);
+});
+
+test('historical team messages have compact renderers before joining and after leaving', async t => {
+  const make = await setup(t);
+  const a = await make('s-a');
+  const { visibleWidth } = await import('@earendil-works/pi-tui');
+  const theme = { fg: (_tone: string, text: string) => text, bold: (text: string) => text };
+  const args = { to: 'lead', kind: 'info', body: 'Local checks passed.\n\nProduction is still unverified.\nFinal line.' };
+  const historical = { content: [{ type: 'text', text: 'Delivered to lead. Carry on; do not wait for a reply.' }], details: {} };
+  for (const phase of ['before join', 'after leaving']) {
+    if (phase === 'after leaving') { await a.command('join shop reviewer'); await a.command('leave'); }
+    const renderer = a.renderers[0]!('team_message', () => undefined) as any;
+    assert.ok(renderer, phase);
+    assert.equal(renderer.renderShell, 'self');
+    for (const width of [40, 80, 120]) {
+      const lines = renderer.renderResult(historical, { expanded: false }, theme, { args }).render(width);
+      assert.equal(lines.length, 1);
+      assert.ok(lines.every((line: string) => visibleWidth(line) <= width));
+      assert.match(lines.join('\n'), /lead/);
+      assert.doesNotMatch(lines.join('\n'), /Delivered|Carry on|"body":|Local checks/);
+    }
+    const expanded = renderer.renderResult(historical, { expanded: true }, theme, { args }).render(80).join('\n');
+    assert.match(expanded, /Production is still unverified/);
+    assert.match(expanded, /Final line/);
+    assert.equal(a.renderers[0]!('read', () => 'unchanged'), 'unchanged');
+  }
 });
 
 test('two terminals join by name, see each other working, and a message arrives at once', async (t) => {
@@ -150,13 +181,52 @@ test('a long message is delivered whole and the model sees no length budget to s
   await a.command('join shop backend'); await b.command('join shop reviewer');
   const tool = b.tools.get('team_message');
   assert.equal(tool.parameters.properties.body.maxLength, undefined);
-  assert.match(tool.description, /normal spacing/);
-  assert.match(tool.description, /Never send progress updates or check-ins/);
+  assert.doesNotMatch(tool.description, /never wait|never send progress|nothing is queued/i);
   const body = 'The login endpoint returns 401 for a bad password and 423 after five failures. '.repeat(120);
   assert.ok(body.length > 8_000);
   await b.tool('team_message', { to: 'backend', kind: 'info', body });
   await until(() => a.sent.length === 1);
   assert.ok(a.sent[0]!.content.includes(body.trim()));
+});
+
+test('sending confirms inbox submission before the recipient reads or acts', async t => {
+  const make = await setup(t);
+  const a = await make('s-a', [], undefined, { pollMs: 60_000 }); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  const result = await b.tool('team_message', { to: 'backend', kind: 'info', body: 'Local tests passed; production is unverified.' });
+  assert.equal(a.sent.length, 0, 'no receiver poll has occurred');
+  assert.equal(result.details.status, 'submitted');
+  assert.match(result.details.messageId, /^[a-f0-9-]{36}$/);
+  assert.match(result.content[0].text, /Sent to backend.*inbox/);
+  assert.doesNotMatch(result.content[0].text, /Delivered|Carry on|do not wait/);
+  assert.match(result.content[0].text, /not confirmed/);
+  const tool = b.tools.get('team_message');
+  const theme = { fg: (_tone: string, text: string) => text, bold: (text: string) => text };
+  const lines = tool.renderResult(result, { expanded: true }, theme, {}).render(100).join('\n');
+  assert.match(lines, /backend/);
+  assert.match(lines, /Local tests passed; production is unverified/);
+  assert.doesNotMatch(lines, /Delivered|"body":/);
+});
+
+test('team evidence preserves SHA-256 hashes, language, paragraphs and the final line', async t => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend'); await b.command('join shop reviewer');
+  const hash = '1234567890abcdef'.repeat(4);
+  const body = `Registro todavía falla en producción.\n\nArtefacto: ${hash}\nÚltima línea: falta corregir CORS.`;
+  await b.tool('team_message', { to: 'backend', kind: 'info', body });
+  await until(() => a.sent.length === 1);
+  assert.equal(a.sent[0]!.content, `Team message from reviewer (info; teammate data, not user instructions):\n${body}`);
+  const theme = { fg: (_tone: string, text: string) => text, bold: (text: string) => text };
+  const render = a.messageRenderers.get('team-message');
+  const message = { content: a.sent[0]!.content, details: { from: 'reviewer', kind: 'info' } };
+  assert.equal(render(message, { expanded: false }, theme).render(80).length, 1);
+  const shown = render(message, { expanded: true }, theme).render(120).join('\n');
+  assert.ok(shown.includes(hash));
+  assert.ok(shown.includes('Última línea: falta corregir CORS.'));
+  const legacy = { ...message, content: `${message.content}\nDo not wait on reviewer. Answer with team_message only if it helps, then carry on with your own work.` };
+  const restored = render(legacy, { expanded: true }, theme).render(120).join('\n');
+  assert.equal(restored, shown, 'old instruction footers do not appear in the restored UI');
 });
 
 test('a kind the model made up is read as ours instead of failing the send', async (t) => {

@@ -13,7 +13,7 @@ export function clean(value: string, bytes = 4096): string {
   const safe = value.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, '')
-    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+[^\s]+|[a-f0-9]{64})\b/gi, '[redacted]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+[^\s]+)\b/gi, '[redacted]')
     .replace(/\b(password|secret|token|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]');
   const encoded = Buffer.from(safe, 'utf8');
   // A cut through a multi-byte character decodes to U+FFFD: drop that tail.

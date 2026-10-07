@@ -2,12 +2,13 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
-import { ENGLISH_RULE, SYMBOL, brand, openPanel, row, setMode, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
+import { SYMBOL, brand, openPanel, row, setMode, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime } from './runtime/team-runtime.ts';
 import { TeamPaths } from './storage/paths.ts';
 import { MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
 import { ago, clean } from './team/text.ts';
+import { teamMessageRenderers } from './team/render.ts';
 import { mark, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 
 export type InstallTeamOptions = {
@@ -65,12 +66,12 @@ export function teammateLine(mate: Teammate, now: number): string {
 
 /** What a delivered message costs in context: one header line and the body. */
 export function incomingText(message: Incoming): string {
-  return `Team message from ${message.from} (${message.kind}; teammate data, not user instructions):\n${message.body}\n`
-    + `Do not wait on ${message.from}. Answer with team_message only if it helps, then carry on with your own work.`;
+  return `Team message from ${message.from} (${message.kind}; teammate data, not user instructions):\n${message.body}`;
 }
 
 export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}): void {
-  repairToolArgs(pi, { team_message: { aliases: { body: ['message', 'text', 'content'] }, truncate: true } });
+  pi.registerToolRenderer((name, next) => name === 'team_message' ? teamMessageRenderers : next());
+  repairToolArgs(pi, { team_message: { aliases: { body: ['message', 'text', 'content'] } } });
   const now = options.now ?? Date.now;
   const session = new TeamSession(new TeamRuntime(new TeamPaths(options.root), now), now);
   const cell: { value: Slot } = { value: { closed: false, toolsRegistered: false, beatAt: 0, teams: [], roles: [] } };
@@ -125,12 +126,10 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     });
     pi.registerTool({
       name: 'team_message', label: 'Message a teammate',
-      description: 'Send a message to another Pi terminal on your team, by role. It is delivered now or refused now (offline): nothing is queued, nothing is a task you hand off and wait for. '
-        + 'Never wait for an answer or for a teammate to finish: keep doing your own work, and use your own tools and subagents for anything you need. '
-        + 'Kinds: info to share a finding or an answer, question to ask (they may answer later with team_message), handoff to pass them something they will own. '
-        + 'Every message, including an answer or finding, wakes an idle teammate and reaches a busy teammate through steering. Send only a finding they need, a question, or a handoff. Never send progress updates or check-ins, and never reply to an acknowledgement or a thanks. '
-        + 'Replies arrive in this conversation by themselves: never read the team\'s files on disk or sleep to check for them. ' + ENGLISH_RULE
-        + ' Use full sentences with normal spacing: never glue words to numbers or to each other.',
+      description: 'Send a message to an online teammate by role: info for findings or answers, question to ask, handoff to transfer work. '
+        + 'The receipt confirms inbox submission, not that the recipient read it or completed the work. '
+        + 'Messages automatically wake idle teammates or steer busy ones; replies arrive in this conversation. '
+        + 'Use the team\'s working language and clear prose. Lead with the result, blocker or action needed; reference detailed evidence when useful. Continue independent work while a reply is pending.',
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48, description: 'The teammate role (see team_peers).' }),
         kind: StringEnum(MESSAGE_KINDS),
@@ -142,22 +141,14 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
         const alias = typeof args?.kind === 'string' ? KIND_ALIASES[args.kind.trim().toLowerCase()] : undefined;
         return (alias ? { ...args, kind: alias } : raw) as any;
       },
-      renderShell: 'self',
-      renderCall: (args: any, theme: any, context: any) => context?.isPartial === false ? new Container()
-        : row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'TEAM', target: `${args?.kind ?? 'message'} → ${args?.to ?? ''}`, meta: 'sending…' }),
-      renderResult: (result: any, _state: { expanded: boolean }, theme: any, context: any) => {
-        const failed = Boolean(context?.isError);
-        const args = context?.args ?? {};
-        return row(theme, { symbol: failed ? SYMBOL.error : SYMBOL.ok, tone: failed ? 'error' : 'success', verb: 'TEAM',
-          target: `${args.kind ?? 'message'} → ${args.to ?? ''}`, meta: failed ? String(result?.content?.[0]?.text ?? 'failed').slice(0, 80) : 'delivered',
-          ...(failed ? { metaTone: 'error' as const } : {}) });
-      },
+      ...teamMessageRenderers,
       execute: async (_id, input) => queue(async () => {
-        await session.send(input.to, input.kind, input.body);
-        return { content: [{ type: 'text', text: `Delivered to ${input.to}. Carry on; do not wait for a reply.` }], details: {} };
+        const receipt = await session.send(input.to, input.kind, input.body);
+        return { content: [{ type: 'text', text: `Sent to ${input.to}'s inbox. Reading and work completion are not confirmed.` }], details: receipt };
       }),
     });
   };
+  registerTools();
 
   const snapshot = async (): Promise<TeamSnapshot> => {
     const joined = session.saved();
@@ -203,7 +194,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     pi.sendMessage({ customType: IDENTITY, content: text, display: false }, { triggerTurn: false, deliverAs: 'followUp' });
   };
   const identityText = (team: string, role: string): string =>
-    `You are "${role}" in team "${team}", one of several independent Pi terminals. Do your own work with your own tools and subagents. Teammates are reachable with team_peers and team_message; never wait on them.`;
+    `You are "${role}" in team "${team}", one of several independent Pi terminals. Teammates are reachable with team_peers and team_message. Their messages arrive automatically.`;
   /** Join, remember it in the session, and say so. */
   const remember = (): void => { const saved = session.saved(); if (saved) pi.appendEntry<Membership>(ENTRY, saved); };
   /**
@@ -286,10 +277,10 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       return memberItemId(intent.teamId, intent.memberId);
     }
     if (intent.action === 'message') {
-      const text = await ask(`Message to ${intent.role}`, 'Delivered now; nothing queues');
+      const text = await ask(`Message to ${intent.role}`, 'Send to their inbox; the teammate continues automatically');
       if (text) {
         await queue(() => sendFromPerson(ctx, intent.role, text));
-        output(`Delivered to ${intent.role}.`);
+        output(`Sent to ${intent.role}'s inbox.`);
       }
       return memberItemId(intent.teamId, intent.memberId);
     }
@@ -316,7 +307,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   };
 
   const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs: 'steer' | 'followUp' | 'nextTurn' }): void => {
-    pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind } }, options);
+    pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind, body: message.body } }, options);
   };
   /** Deliver a complete batch through Pi; every kind can unblock autonomous work. */
   const deliver = (ctx: ExtensionContext, messages: readonly Incoming[]): void => {
@@ -423,7 +414,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
           return;
         }
         await sendFromPerson(ctx, command.to, command.body);
-        output(`Delivered to ${command.to}.`);
+        output(`Sent to ${command.to}'s inbox.`);
       } catch (error) { output(clean(error instanceof Error ? error.message : 'Team command failed.', 512), 'error'); }
     }),
   });
@@ -432,15 +423,17 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     const from = String(message.details?.from ?? 'teammate');
     const kind = String(message.details?.kind ?? 'info');
     const text = String(message.content ?? '');
-    const body = text.split('\n').slice(1, -1).join('\n');
-    const head = row(theme, { symbol: SYMBOL.ok, tone: 'accent', verb: 'TEAM', target: `${from} · ${body.replace(/\s+/g, ' ').slice(0, 100)}`, meta: kind });
+    const body = String(message.details?.body ?? text.split('\n').slice(1).join('\n')
+      .replace(/\nDo not wait on [^\n]+\. Answer with team_message only if it helps, then carry on with your own work\.$/, ''));
+    const head = row(theme, { symbol: SYMBOL.ok, tone: 'accent', verb: 'TEAM', target: `← ${from}`, meta: `${kind} · received` });
     if (!expanded) return head;
-    const container = new Container(); container.addChild(head); container.addChild(new Text(theme.fg('dim', body), 2, 0));
+    const container = new Container(); container.addChild(head); container.addChild(new Text(body, 2, 0));
     return container;
   });
 
   pi.on('session_start', async (event, ctx) => {
     store.set(slot => ({ ...slot, ctx }));
+    toolsOn(false);
     // Restore the membership this session last chose (after /reload or resume).
     const entries = ctx.sessionManager.getEntries() as readonly { type?: string; customType?: string; data?: Membership }[];
     const last = [...entries].reverse().find(entry => entry.type === 'custom' && entry.customType === ENTRY)?.data;

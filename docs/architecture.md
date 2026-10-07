@@ -2,11 +2,11 @@
 
 ## Integration
 
-`src/index.ts` registers `/team` and, lazily on the first join, the `team_peers` and `team_message` tools. At startup it creates no records, adds no tools and leaves the prompt unchanged. While the terminal is joined:
+`src/index.ts` registers `/team` and the inactive `team_peers` and `team_message` definitions at startup. The public `registerToolRenderer` hook supplies a compact renderer even for historical calls before joining. At startup it creates no team records and leaves the prompt unchanged. While the terminal is joined:
 
 - the two tools are active, and they are removed again on leave;
-- `before_agent_start` appends one stable line naming the role and the team, and records the prompt as the terminal's focus;
-- a poll loop (1 s) receives messages, and every 10 s it renews presence.
+- one persisted message records the role on membership changes; `before_agent_start` records the prompt as the terminal's focus;
+- a poll loop (1 s) receives messages, and every 5 s it renews presence.
 
 Membership is persisted with `pi.appendEntry('team-membership', …)`, which is free and never enters model context. It is restored on `session_start`. On `session_shutdown` the role is released, so a reload can take it back right away.
 
@@ -14,7 +14,7 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 
 `src/team/session.ts` (`TeamSession`) holds one terminal's membership and does no queuing of work:
 
-- `send` resolves the role and **refuses offline recipients**. Messages use kinds `info | question | handoff` and a 10-minute TTL. There is no request/reply correlation.
+- `send` resolves the role and **refuses offline recipients**. It returns `submitted` with the message ID only after the durable inbox write; this does not confirm reading or completed work. Messages use kinds `info | question | handoff` and a 10-minute TTL. There is no request/reply correlation.
 - `receive` claims, reads and finishes each pending message exactly once, in creation order.
 - `setActivity` / `teammates` publish and read `teams/<team>/activity/<member>.json` (`working | idle`, since, focus) next to the presence lease, so `/team` and `team_peers` show where each terminal is.
 

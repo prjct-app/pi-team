@@ -223,7 +223,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
       const admin = team.mates.find(entry => entry.admin);
       return {
         title: team.name,
-        subtitle: member ? `You are ${cell.value.joined!.role}. Messages are delivered now or refused now; nothing queues.` : 'You are not in this team. Press a or Enter to join.',
+        subtitle: member ? `You are ${cell.value.joined!.role}. Messages reach online teammates automatically; a sent receipt does not confirm completed work.` : 'You are not in this team. Press a or Enter to join.',
         subtitleTone: member ? 'accent' : 'muted',
         fields: [
           { label: LEAD.working, value: admin ? admin.role : '—' },

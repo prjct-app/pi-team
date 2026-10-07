@@ -13,10 +13,11 @@ import { bounded, clean } from './text.ts';
 
 /**
  * Kinds of message between terminals. None of them is a request that waits
- * for a result: a message is information, delivered now or refused now.
+ * for a result: submission and the recipient's response are separate events.
  */
 export const MESSAGE_KINDS = ['info', 'question', 'handoff'] as const;
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
+export type SendReceipt = Readonly<{ messageId: string; status: 'submitted'; to: string; kind: MessageKind; body: string }>;
 
 /** Team names and roles: what people type. Identity is always the ID behind them. */
 export const NAME_PATTERN = TEAM_ID_PATTERN;
@@ -465,21 +466,23 @@ export class TeamSession {
     return list.sort((a, b) => Number(b.online) - Number(a.online) || a.role.localeCompare(b.role));
   }
 
-  /** Delivers now or fails now: an offline teammate is an error, never a queue. */
-  async send(to: string, kind: MessageKind, body: string): Promise<void> {
+  /** Confirms submission to an online peer's inbox, not a read or completed work. */
+  async send(to: string, kind: MessageKind, body: string): Promise<SendReceipt> {
     const joined = this.state.get();
     if (!joined) throw new Error('Not in a team. Use /team join <team> <role>.');
     if (to === joined.role) throw new Error('That is you. Message another role.');
     bounded(body, MAX_BODY_BYTES, 'Message');
     const target = (await this.teammates(joined.teamId)).find(mate => mate.role === to);
     const refusal = !target ? `No "${to}" in team ${joined.team}.`
-      : !target.online ? `${to} is offline, so nothing was sent. team_peers shows who is online. Do not wait for them: carry on with your own work.` : undefined;
+      : !target.online ? `${to} is offline, so nothing was sent. team_peers shows who is online.` : undefined;
     if (refusal) {
       await this.record(joined.teamId, { type: 'refused', by: joined.membership.memberId, to: target?.id ?? to, kind, text: target ? 'offline' : 'no such role' });
       throw new Error(refusal);
     }
-    await this.runtime.requests.send(joined.membership, { to, kind, body: clean(body, MAX_BODY_BYTES), ttlMs: MESSAGE_TTL_MS });
+    const text = bounded(clean(body, Infinity), MAX_BODY_BYTES, 'Message');
+    const message = await this.runtime.requests.send(joined.membership, { to, kind, body: text, ttlMs: MESSAGE_TTL_MS });
     await this.record(joined.teamId, { type: 'message', by: joined.membership.memberId, to: target!.id, kind, text: body });
+    return { messageId: message.messageId, status: 'submitted', to, kind, body: text };
   }
 
   private eventsPath(teamId: string): string { return join(this.runtime.paths.team(teamId), 'events.json'); }
