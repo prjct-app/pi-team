@@ -1,3 +1,9 @@
+## [0.9.9](https://github.com/prjct-app/pi-team/compare/v0.9.8...v0.9.9) (2026-10-07)
+
+### Bug Fixes
+
+* render team messages clearly and report submission honestly ([73a11a2](https://github.com/prjct-app/pi-team/commit/73a11a2627a19776d1fc5e804604c9511bdd10c7))
+
 ## [0.9.8](https://github.com/prjct-app/pi-team/compare/v0.9.7...v0.9.8) (2026-10-06)
 
 ### Bug Fixes
