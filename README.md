@@ -4,7 +4,7 @@
 
 Connect independent Pi terminals into a named team so they can talk to each other.
 
-You open the terminals and give each a role. Each one keeps its own session, model, cwd and tools, and does its own work, with its own subagents. `pi-team` only lets them see each other and exchange messages. Nothing is queued and nobody waits: a message is delivered now or refused now.
+You open the terminals and give each a role. Each one keeps its own session, model, cwd and tools, and does its own work, with its own subagents. `pi-team` lets them see each other and exchange messages. Online teammates receive messages automatically; offline recipients are refused.
 
 ## Install
 
@@ -54,17 +54,19 @@ While joined, the agent gets two tools and one context message that says who it 
 - `team_peers` lists the other terminals with their live activity.
 - `team_message { to, kind: info | question | handoff, body }` sends a message.
 
-The tool descriptions tell the agent never to wait on a teammate, to keep working and to use its own tools and subagents for anything it needs. When you leave, both tools go away and a last message says the team context no longer applies.
+The tool describes submission separately from reading or completing work. It encourages useful messages in the team's working language, with the result, blocker or action first. The model decides when to coordinate; independent work can continue while replies arrive. When you leave, both tools become inactive and a last message says the team context no longer applies.
 
-## Why nothing queues
+The transcript shows one compact row such as `✓ TEAM → lead    info · sent`. Expanding it shows the original message as wrapped text, without a JSON wrapper or repeated receipt instructions. Renderers are registered at startup, so historical calls stay readable before joining a team or after leaving it.
 
-Earlier versions had requests that waited for a correlated result, with a queue per member. Agents ended up waiting on each other in chains, nothing advanced, and you could not see where it was stuck. So now:
+## Delivery and autonomous continuation
 
-- **Delivered now or refused now.** If the teammate is online, the message arrives within a second. If it is working, the message is steered into the running turn. If it is idle, every message opens a turn, including answers and findings. If it is offline, the send fails straight away, and nothing is kept for later.
+The transport uses durable inboxes. Submission does not wait for the teammate to answer:
+
+- **Submitted or refused.** A successful send returns the message ID and `submitted` status after writing the online teammate's inbox. It does not confirm reading or completed work. The receiver normally picks it up on its next one-second poll. If it is working, the message is steered into the running turn. If it is idle, every message opens a turn, including answers and findings. If it is offline at submission, the send fails and nothing is kept for later.
 - **No request/result.** A question may get an answer later, as another message. Nothing tracks it or blocks on it.
 - **Visible activity and full traceability.** Each terminal publishes whether it is working or idle, since when, and on what (its latest prompt). Every team keeps a timeline with exact times: joins and leaves, who started working on what, who went idle, every message (from → to, kind, text) and every send refused because the recipient was offline. The `/team` panel shows all of it, so a stalled terminal is obvious.
 - **Autonomous continuation.** Every message kind wakes an idle terminal; busy terminals receive steering through the Pi SDK. A batch reaches the same automatic turn in full. There is no six-turn limit and no requirement for a person to type before work continues.
-- **Useful communication.** Send findings, answers, questions, and handoffs. Avoid progress check-ins and acknowledgement loops. The model decides whether a reply adds value. Aliases such as `answer`, `reply`, and `request` retain their meaning without changing delivery.
+- **Useful communication.** The model decides whether a finding, answer, question, update or handoff helps the work. Aliases such as `answer`, `reply`, and `request` retain their meaning without changing delivery. The harness adds no repetitive instruction footer to each message and preserves evidence hashes.
 
 ## Identity
 
@@ -80,7 +82,7 @@ Membership is saved in the session, and the role stays bound to that session unt
 
 ## Storage and safety
 
-State lives under `${PRJCT_HOME:-~/.prjct}/pi-team/teams/<team>/`, with private permissions, strict schemas, byte limits, locks and atomic writes. Messages are at most 4 KB. A message that nobody picks up within 10 minutes (for example, because the recipient crashed) is dropped and never replayed.
+State lives under `${PRJCT_HOME:-~/.prjct}/pi-team/teams/<team>/`, with private permissions, strict schemas, byte limits, locks and atomic writes. Messages are at most 32 KiB. Oversized messages are rejected instead of silently truncated. A message that nobody picks up within 10 minutes (for example, because the recipient crashed) expires.
 
 This is not a sandbox. Every terminal runs as your OS user. Teammate messages are marked as teammate data, not user instructions, and credentials in them are redacted on a best-effort basis. Message text goes to the recipient's model provider like any prompt, so do not send secrets. Local disk only: no network filesystems and no messaging across machines.
 

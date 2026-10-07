@@ -1,7 +1,7 @@
 {
   "name": "@prjct.app/pi-team",
   "version": "0.9.8",
-  "description": "Connect independent Pi terminals into a named team: live presence and activity, and messages that never queue.",
+  "description": "Connect independent Pi terminals with live presence, automatic message delivery and clear submission receipts.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -71,6 +71,6 @@
     "CHANGELOG.md"
   ],
   "dependencies": {
-    "@prjct.app/pi-tui-kit": "^0.3.4"
+    "@prjct.app/pi-tui-kit": "^0.3.5"
   }
 }
