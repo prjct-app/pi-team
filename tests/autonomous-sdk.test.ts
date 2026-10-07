@@ -56,6 +56,9 @@ test('public Pi SDK receives answers, batches, and busy steering without a typed
     await sender.disconnect(); await rm(root, { recursive: true, force: true });
   });
   await session.bindExtensions({ mode: 'rpc', onError: error => errors.push(error) });
+  const historicalRenderer = session.extensionRunner?.resolveToolRenderers('team_message', () => undefined);
+  assert.equal(historicalRenderer?.renderShell, 'self', 'restored tool calls render before the session joins a team');
+  assert.ok(historicalRenderer?.renderCall && historicalRenderer?.renderResult);
   await session.prompt('/team join sdk-team receiver');
   await sender.join({ team: 'sdk-team', role: 'sender', sessionId: 'sdk-sender', cwd: root });
   assert.equal(captures.length, 0);

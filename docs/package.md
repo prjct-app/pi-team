@@ -4,7 +4,7 @@
 
 - npm name: `@prjct.app/pi-team`
 - Repository: [prjct-app/pi-team](https://github.com/prjct-app/pi-team)
-- Tested host: Pi `0.85.1`; Node.js `22.19+`
+- Tested host: Pi `1.0.4`; Node.js `22.19+`
 
 The npm name and repository name may differ. The package rename changed no
 runtime command names, event names, persisted entry types, or settings keys.
@@ -14,11 +14,11 @@ runtime command names, event names, persisted entry types, or settings keys.
 Pi-provided libraries are declared in `peerDependencies` with `*`, as the Pi
 package guide requires, and are not bundled. The exact Pi 1.0.4 devDependencies
 establish the tested baseline; the peer wildcard is not a claim that every Pi
-release is supported. This package has **no runtime dependencies**: storage is
-self-contained.
+release is supported. Storage is self-contained; `@prjct.app/pi-tui-kit` is a
+normal runtime dependency providing the shared TUI components.
 
-Third-party runtime dependencies would belong in `dependencies`. A package that
-directly imports another Pi package's resources must bundle it instead.
+Runtime dependencies belong in `dependencies`, including independently published
+extension packages. No sibling checkout or bundled extension group is required.
 
 ## Publishing
 
