@@ -1,3 +1,9 @@
+## [0.10.0](https://github.com/prjct-app/pi-team/compare/v0.9.9...v0.10.0) (2026-10-09)
+
+### Features
+
+* info never wakes a teammate and the role leaves the context ([eec71d7](https://github.com/prjct-app/pi-team/commit/eec71d7e1ee04a9311e92b72b44e5ad617d187e6))
+
 ## [0.9.9](https://github.com/prjct-app/pi-team/compare/v0.9.8...v0.9.9) (2026-10-07)
 
 ### Bug Fixes
