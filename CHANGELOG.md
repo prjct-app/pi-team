@@ -1,3 +1,9 @@
+## [0.10.1](https://github.com/prjct-app/pi-team/compare/v0.10.0...v0.10.1) (2026-10-09)
+
+### Bug Fixes
+
+* every message wakes a teammate again ([dfc5102](https://github.com/prjct-app/pi-team/commit/dfc5102468b6d792e5f8a718c67dca49cc0fc69f))
+
 ## [0.10.0](https://github.com/prjct-app/pi-team/compare/v0.9.9...v0.10.0) (2026-10-09)
 
 ### Features
