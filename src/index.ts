@@ -25,8 +25,6 @@ export type InstallTeamOptions = {
 const ENTRY = 'team-membership';
 const TOOLS = ['team_peers', 'team_message'];
 const IDENTITY = 'team-identity';
-/** Kinds that ask the receiver to act now. Information never wakes anyone. */
-const WAKING_KINDS: readonly string[] = ['question', 'handoff'];
 const LEFT = 'You are no longer in a team: team_peers and team_message are gone, and earlier team context no longer applies.';
 /** Kinds models reach for that are not ours: an answer is information, a task is a handoff. */
 const KIND_ALIASES: Readonly<Record<string, string>> = {
@@ -133,9 +131,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     pi.registerTool({
       name: 'team_message', label: 'Message a teammate',
       description: `${identity}Send a message to an online teammate by role. `
-        + 'question asks for an answer and handoff transfers work: both wake an idle teammate or reach a busy one at once. '
-        + 'info is for findings and answers that need no action: it never wakes anyone and reaches the teammate with its next run. '
-        + 'If the teammate must act on it now, send a handoff. '
+        + 'info for findings or answers, question to ask, handoff to transfer work. Every message wakes an idle teammate or steers a busy one, '
+        + 'so do not send one only to acknowledge or to say you received a message. '
         + 'The receipt confirms inbox submission, not that the recipient read it or completed the work. Replies arrive in this conversation. '
         + 'Use the team\'s working language and clear prose. Lead with the result, blocker or action needed; reference detailed evidence when useful. Continue independent work while a reply is pending.',
       parameters: Type.Object({
@@ -316,24 +313,23 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     await openTeamPanel(ctx, next);
   };
 
-  const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs?: 'steer' | 'followUp' }): void => {
+  const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs: 'steer' | 'followUp' }): void => {
     pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind, body: message.body } }, options);
   };
   /**
-   * Deliver a batch through Pi. A question or handoff asks for action: it steers
-   * a busy terminal, or the idle batch opens one turn after its earlier messages
-   * are appended. Information never wakes anyone: without a trigger Pi appends
-   * it now, or at the end of the running turn, so it reaches the model with the
-   * next run, whatever starts it. nextTurn would wait for a typed prompt.
+   * Deliver a complete batch through Pi; every kind can unblock autonomous work.
+   * Agents report results as info, so gating wakes by kind left teams stuck
+   * (0.10.0). A busy terminal is steered; an idle batch opens one turn.
    */
   const deliver = (ctx: ExtensionContext, messages: readonly Incoming[]): void => {
     if (!messages.length) return;
     const idle = ctx.isIdle();
-    const wakes = (message: Incoming): boolean => WAKING_KINDS.includes(message.kind);
-    const wake = idle && messages.some(wakes);
-    messages.forEach((message, index) => show(message,
-      idle ? (wake && index === messages.length - 1 ? { triggerTurn: true, deliverAs: 'followUp' } : { triggerTurn: false })
-        : wakes(message) ? { triggerTurn: true, deliverAs: 'steer' } : { triggerTurn: false }));
+    messages.forEach((message, index) => show(message, {
+      // An idle batch appends its earlier messages immediately, then opens one turn.
+      // nextTurn waits for a typed prompt and must never carry autonomous work.
+      triggerTurn: !idle || index === messages.length - 1,
+      deliverAs: idle ? 'followUp' : 'steer',
+    }));
   };
 
   const poll = async (): Promise<void> => {

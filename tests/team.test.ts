@@ -131,6 +131,7 @@ test('two terminals join by name, see each other working, and a message arrives 
   assert.equal(await a.emit('before_agent_start', { prompt: 'Implement the login endpoint', systemPrompt: 'base' }), undefined);
   assert.equal(a.identities.length, 0);
   assert.match(a.tools.get('team_message').description, /^You are "backend" in team "shop"/);
+  assert.match(a.tools.get('team_message').description, /Every message wakes an idle teammate/);
   // Activity is written by backend's own terminal; reviewer sees it once it lands.
   const seen = { text: '' };
   await until(() => /◆ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
@@ -149,14 +150,14 @@ test('two terminals join by name, see each other working, and a message arrives 
   await until(() => b.sent.length === 1);
   assert.deepEqual(b.sent[0]!.options, { triggerTurn: true, deliverAs: 'followUp' });
 
-  // Idle recipient: information is appended without a wake; the next run carries it.
+  // Idle recipient: information also opens a turn without human input.
   await a.tool('team_message', { to: 'reviewer', kind: 'info', body: '401, see src/auth.ts' });
   await until(() => b.sent.length === 2);
   assert.match(b.sent[1]!.content, /Team message from backend \(info/);
-  assert.deepEqual(b.sent[1]!.options, { triggerTurn: false });
+  assert.deepEqual(b.sent[1]!.options, { triggerTurn: true, deliverAs: 'followUp' });
 });
 
-test('findings never wake anyone; the next question or handoff carries them', async t => {
+test('answers and findings wake autonomous work beyond the former limit', async t => {
   const make = await setup(t);
   const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
@@ -164,17 +165,13 @@ test('findings never wake anyone; the next question or handoff carries them', as
     await b.tool('team_message', { to: 'backend', kind: 'info', body: `finding ${index}` });
     await until(() => a.sent.length === index + 1);
   }
-  assert.ok(a.sent.every(message => message.options.triggerTurn === false && message.options.deliverAs === undefined));
+  assert.ok(a.sent.every(message => message.options.triggerTurn));
   await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'Please own the retry fix.' });
   await until(() => a.sent.length === 11);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'followUp' });
   a.idle.value = false;
-  // Busy: information waits for the end of the running turn instead of steering it.
   await b.tool('team_message', { to: 'backend', kind: 'info', body: 'The repro is in tests/retry.ts.' });
   await until(() => a.sent.length === 12);
-  assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: false });
-  await b.tool('team_message', { to: 'backend', kind: 'question', body: 'Does the fix cover 503s?' });
-  await until(() => a.sent.length === 13);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'steer' });
 });
 
@@ -299,7 +296,7 @@ test('questions and handoffs never wait for a wake window or user input', async 
   assert.ok(a.sent.every(s => s.options.triggerTurn && s.options.deliverAs === 'followUp'));
   assert.ok(!a.notices.some(n => /window|wait.*type/.test(n)));
   a.idle.value = false;
-  await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'The dependency is ready; wire it in.' });
+  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'The dependency is ready.' });
   await until(() => a.sent.length === 13);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'steer' });
 });
