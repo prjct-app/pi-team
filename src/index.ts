@@ -25,6 +25,8 @@ export type InstallTeamOptions = {
 const ENTRY = 'team-membership';
 const TOOLS = ['team_peers', 'team_message'];
 const IDENTITY = 'team-identity';
+/** Kinds that ask the receiver to act now. Information never wakes anyone. */
+const WAKING_KINDS: readonly string[] = ['question', 'handoff'];
 const LEFT = 'You are no longer in a team: team_peers and team_message are gone, and earlier team context no longer applies.';
 /** Kinds models reach for that are not ours: an answer is information, a task is a handoff. */
 const KIND_ALIASES: Readonly<Record<string, string>> = {
@@ -111,8 +113,12 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return [`team ${joined.team} · you are ${joined.role}`, ...mates.map(mate => teammateLine(mate, now()))].join('\n');
   };
 
-  const registerTools = (): void => {
-    if (store.get().toolsRegistered) return;
+  /**
+   * Registered again on every join and rename: the role rides in the tool
+   * description, which survives compaction and automated turns without a
+   * message in the context.
+   */
+  const registerTools = (identity = ''): void => {
     store.set(slot => ({ ...slot, toolsRegistered: true }));
     pi.registerTool({
       name: 'team_peers', label: 'Teammates',
@@ -126,9 +132,11 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     });
     pi.registerTool({
       name: 'team_message', label: 'Message a teammate',
-      description: 'Send a message to an online teammate by role: info for findings or answers, question to ask, handoff to transfer work. '
-        + 'The receipt confirms inbox submission, not that the recipient read it or completed the work. '
-        + 'Messages automatically wake idle teammates or steer busy ones; replies arrive in this conversation. '
+      description: `${identity}Send a message to an online teammate by role. `
+        + 'question asks for an answer and handoff transfers work: both wake an idle teammate or reach a busy one at once. '
+        + 'info is for findings and answers that need no action: it never wakes anyone and reaches the teammate with its next run. '
+        + 'If the teammate must act on it now, send a handoff. '
+        + 'The receipt confirms inbox submission, not that the recipient read it or completed the work. Replies arrive in this conversation. '
         + 'Use the team\'s working language and clear prose. Lead with the result, blocker or action needed; reference detailed evidence when useful. Continue independent work while a reply is pending.',
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48, description: 'The teammate role (see team_peers).' }),
@@ -172,17 +180,21 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
 
   const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved, takeover = false): Promise<boolean> => {
     const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}) });
-    registerTools(); toolsOn(true); showMembership();
-    announce(identityText(team, role), ctx);
+    describeRole(); showMembership();
     store.set(slot => ({ ...slot, beatAt: now() }));
     await refreshCompletions();
     return created;
   };
   const dropMembership = (): void => { toolsOn(false); showMembership(); };
+  /** The current role, in the team_message description: no context message, and it survives compaction. */
+  const describeRole = (): void => {
+    const joined = session.current();
+    if (!joined) return;
+    registerTools(identityText(joined.team, joined.role)); toolsOn(true);
+  };
   /**
-   * Who you are, as one persisted context message per change. A per-turn
-   * system-prompt line vanished on automated turns (teammate messages,
-   * subagent reports): the model lost its role and the cached prefix flipped.
+   * Leaving, as one persisted context message, because the person asked for it.
+   * The role itself is never a message: it lives in the tool description.
    */
   const identity = { last: undefined as string | undefined };
   const announce = (text: string, ctx: ExtensionContext | undefined = store.get().ctx): void => {
@@ -194,7 +206,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     pi.sendMessage({ customType: IDENTITY, content: text, display: false }, { triggerTurn: false, deliverAs: 'followUp' });
   };
   const identityText = (team: string, role: string): string =>
-    `You are "${role}" in team "${team}", one of several independent Pi terminals. Teammates are reachable with team_peers and team_message. Their messages arrive automatically.`;
+    `You are "${role}" in team "${team}", one of several independent Pi terminals. `;
   /** Join, remember it in the session, and say so. */
   const remember = (): void => { const saved = session.saved(); if (saved) pi.appendEntry<Membership>(ENTRY, saved); };
   /**
@@ -225,13 +237,11 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
   const confirm = (ctx: ExtensionContext, title: string, detail: string): Promise<boolean> => ctx.ui.confirm(title, detail);
   const renameTeam = async (next: string): Promise<string> => {
     const before = session.current()?.team;
-    await session.renameTeam(next); showMembership(); remember();
-    const role = session.current()?.role;
-    if (role) announce(identityText(next, role));
+    await session.renameTeam(next); showMembership(); remember(); describeRole();
     return `Renamed team ${before} to ${next}.`;
   };
   const renameMember = async (role: string, next: string): Promise<string> => {
-    await session.renameMember(role, next); showMembership(); remember(); await refreshCompletions();
+    await session.renameMember(role, next); showMembership(); remember(); describeRole(); await refreshCompletions();
     return `Renamed ${role} to ${next}.`;
   };
 
@@ -306,19 +316,24 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     await openTeamPanel(ctx, next);
   };
 
-  const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs: 'steer' | 'followUp' | 'nextTurn' }): void => {
+  const show = (message: Incoming, options: { readonly triggerTurn: boolean; readonly deliverAs?: 'steer' | 'followUp' }): void => {
     pi.sendMessage({ customType: 'team-message', display: true, content: incomingText(message), details: { from: message.from, kind: message.kind, body: message.body } }, options);
   };
-  /** Deliver a complete batch through Pi; every kind can unblock autonomous work. */
+  /**
+   * Deliver a batch through Pi. A question or handoff asks for action: it steers
+   * a busy terminal, or the idle batch opens one turn after its earlier messages
+   * are appended. Information never wakes anyone: without a trigger Pi appends
+   * it now, or at the end of the running turn, so it reaches the model with the
+   * next run, whatever starts it. nextTurn would wait for a typed prompt.
+   */
   const deliver = (ctx: ExtensionContext, messages: readonly Incoming[]): void => {
     if (!messages.length) return;
     const idle = ctx.isIdle();
-    messages.forEach((message, index) => show(message, {
-      // An idle batch appends its earlier messages immediately, then opens one turn.
-      // nextTurn waits for a typed prompt and must never carry autonomous work.
-      triggerTurn: !idle || index === messages.length - 1,
-      deliverAs: idle ? 'followUp' : 'steer',
-    }));
+    const wakes = (message: Incoming): boolean => WAKING_KINDS.includes(message.kind);
+    const wake = idle && messages.some(wakes);
+    messages.forEach((message, index) => show(message,
+      idle ? (wake && index === messages.length - 1 ? { triggerTurn: true, deliverAs: 'followUp' } : { triggerTurn: false })
+        : wakes(message) ? { triggerTurn: true, deliverAs: 'steer' } : { triggerTurn: false }));
   };
 
   const poll = async (): Promise<void> => {
@@ -341,7 +356,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
         return;
       }
       if (beat.renamed) {
-        showMembership(); remember();
+        showMembership(); remember(); describeRole();
         output(`Team: you are now ${beat.renamed.role} in ${beat.renamed.team}.`);
       }
       await refreshCompletions().catch(() => {});
