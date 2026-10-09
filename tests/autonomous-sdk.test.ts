@@ -18,7 +18,7 @@ const until = async (predicate: () => boolean) => {
   }
 };
 
-test('public Pi SDK receives answers, batches, and busy steering without a typed recipient prompt', async t => {
+test('public Pi SDK: findings wait for the next run; questions, handoffs and busy steering need no typed prompt', async t => {
   const root = await mkdtemp(join(tmpdir(), 'pi-team-sdk-'));
   const captures: string[] = [];
   const errors: unknown[] = [];
@@ -62,10 +62,14 @@ test('public Pi SDK receives answers, batches, and busy steering without a typed
   await session.prompt('/team join sdk-team receiver');
   await sender.join({ team: 'sdk-team', role: 'sender', sessionId: 'sdk-sender', cwd: root });
   assert.equal(captures.length, 0);
-  for (const index of Array.from({ length: 9 }, (_, i) => i)) {
-    await sender.send('receiver', 'info', `ANSWER_${index}`);
-    await until(() => captures.some(text => text.includes(`ANSWER_${index}`)) && session.isIdle);
-  }
+  const findings = Array.from({ length: 9 }, (_, i) => `ANSWER_${i}`);
+  for (const body of findings) await sender.send('receiver', 'info', body);
+  await until(() => session.sessionManager.getEntries().filter(entry => entry.type === 'custom_message' && entry.customType === 'team-message').length === findings.length);
+  await new Promise(resolve => setTimeout(resolve, 350));
+  assert.equal(captures.length, 0, 'information never wakes the receiver');
+  await sender.send('receiver', 'question', 'NEXT_QUESTION');
+  await until(() => captures.length === 1 && session.isIdle);
+  assert.ok(findings.every(body => captures[0]!.includes(body)) && captures[0]!.includes('NEXT_QUESTION'), 'the next run carries every finding');
   assert.match(captures[0]!, /You are .*receiver.*sdk-team/);
   await Promise.all(['BATCH_FIRST', 'BATCH_MIDDLE', 'BATCH_LAST'].map(body => sender.send('receiver', 'handoff', body)));
   await until(() => captures.some(text => ['BATCH_FIRST', 'BATCH_MIDDLE', 'BATCH_LAST'].every(body => text.includes(body))) && session.isIdle);

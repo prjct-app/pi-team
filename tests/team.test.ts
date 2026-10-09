@@ -127,11 +127,10 @@ test('two terminals join by name, see each other working, and a message arrives 
   await b.command('join shop reviewer');
   assert.match(b.last(), /^Joined team shop as reviewer/);
 
-  // The role is one persisted message per change, never a per-turn system-prompt edit.
+  // The role lives in the tool description: never a context message or a per-turn system-prompt edit.
   assert.equal(await a.emit('before_agent_start', { prompt: 'Implement the login endpoint', systemPrompt: 'base' }), undefined);
-  const identity = a.identities.filter(m => /You are "backend" in team "shop"/.test(String(m.content)));
-  assert.equal(identity.length, 1);
-  assert.deepEqual(identity[0]!.options, { triggerTurn: false, deliverAs: 'followUp' });
+  assert.equal(a.identities.length, 0);
+  assert.match(a.tools.get('team_message').description, /^You are "backend" in team "shop"/);
   // Activity is written by backend's own terminal; reviewer sees it once it lands.
   const seen = { text: '' };
   await until(() => /◆ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
@@ -150,14 +149,14 @@ test('two terminals join by name, see each other working, and a message arrives 
   await until(() => b.sent.length === 1);
   assert.deepEqual(b.sent[0]!.options, { triggerTurn: true, deliverAs: 'followUp' });
 
-  // Idle recipient: information also opens a turn without human input.
+  // Idle recipient: information is appended without a wake; the next run carries it.
   await a.tool('team_message', { to: 'reviewer', kind: 'info', body: '401, see src/auth.ts' });
   await until(() => b.sent.length === 2);
   assert.match(b.sent[1]!.content, /Team message from backend \(info/);
-  assert.deepEqual(b.sent[1]!.options, { triggerTurn: true, deliverAs: 'followUp' });
+  assert.deepEqual(b.sent[1]!.options, { triggerTurn: false });
 });
 
-test('answers and findings wake autonomous work beyond the former limit', async t => {
+test('findings never wake anyone; the next question or handoff carries them', async t => {
   const make = await setup(t);
   const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
@@ -165,13 +164,17 @@ test('answers and findings wake autonomous work beyond the former limit', async 
     await b.tool('team_message', { to: 'backend', kind: 'info', body: `finding ${index}` });
     await until(() => a.sent.length === index + 1);
   }
-  assert.ok(a.sent.every(message => message.options.triggerTurn));
+  assert.ok(a.sent.every(message => message.options.triggerTurn === false && message.options.deliverAs === undefined));
   await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'Please own the retry fix.' });
   await until(() => a.sent.length === 11);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'followUp' });
   a.idle.value = false;
+  // Busy: information waits for the end of the running turn instead of steering it.
   await b.tool('team_message', { to: 'backend', kind: 'info', body: 'The repro is in tests/retry.ts.' });
   await until(() => a.sent.length === 12);
+  assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: false });
+  await b.tool('team_message', { to: 'backend', kind: 'question', body: 'Does the fix cover 503s?' });
+  await until(() => a.sent.length === 13);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'steer' });
 });
 
@@ -296,7 +299,7 @@ test('questions and handoffs never wait for a wake window or user input', async 
   assert.ok(a.sent.every(s => s.options.triggerTurn && s.options.deliverAs === 'followUp'));
   assert.ok(!a.notices.some(n => /window|wait.*type/.test(n)));
   a.idle.value = false;
-  await b.tool('team_message', { to: 'backend', kind: 'info', body: 'The dependency is ready.' });
+  await b.tool('team_message', { to: 'backend', kind: 'handoff', body: 'The dependency is ready; wire it in.' });
   await until(() => a.sent.length === 13);
   assert.deepEqual(a.sent.at(-1)!.options, { triggerTurn: true, deliverAs: 'steer' });
 });
@@ -546,13 +549,17 @@ test('reload rejoins by ID, even after the role was renamed while away', async (
   assert.equal(again.status.text, 'team shop · api');
 });
 
-test('the role reaches the model once per change and leaving says so', async (t) => {
+test('the role lives in the tool description, follows renames, and leaving says so', async (t) => {
   const make = await setup(t);
   const a = await make('s-id');
   await a.command('join shop backend');
   await a.emit('before_agent_start', { prompt: 'one', systemPrompt: 'base' });
   await a.emit('before_agent_start', { prompt: 'two', systemPrompt: 'base' });
-  assert.equal(a.identities.length, 1, 'turns do not repeat it');
+  assert.equal(a.identities.length, 0, 'the role is never a context message');
+  assert.match(a.tools.get('team_message').description, /^You are "backend" in team "shop"/);
+  await a.command('rename market');
+  assert.match(a.tools.get('team_message').description, /^You are "backend" in team "market"/);
+  assert.ok(a.active.includes('team_message'), 'a rename keeps the tools active');
   await a.command('leave');
   assert.match(a.identities.at(-1)!.content, /no longer in a team/);
   assert.ok(a.identities.every(m => m.options.triggerTurn === false && m.options.deliverAs === 'followUp'));
