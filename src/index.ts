@@ -4,10 +4,7 @@ import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { SYMBOL, brand, openPanel, row, setMode, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
-import { TeamRuntime } from './runtime/team-runtime.ts';
-import { TeamPaths } from './storage/paths.ts';
-import { MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
-import { ago, clean } from './team/text.ts';
+import { TeamRuntime, TeamPaths, MESSAGE_KINDS, NAME_PATTERN, TeamSession, ago, clean, type Fate, type Incoming, type Saved, type Teammate } from '@prjct.app/team-core';
 import { teamMessageRenderers } from './team/render.ts';
 import { mark, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 
@@ -48,6 +45,8 @@ type Slot = {
   readonly closed: boolean;
   readonly toolsRegistered: boolean;
   readonly beatAt: number;
+  /** A poll is queued or running: the timer does not queue another behind it. */
+  readonly polling?: boolean;
   readonly focus?: string;
   readonly teams: readonly string[];
   readonly roles: readonly string[];
@@ -175,8 +174,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return left ? `Left team ${left.team}.` : 'Not in a team.';
   };
 
-  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved, takeover = false): Promise<boolean> => {
-    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}) });
+  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved, takeover = false, steal = false): Promise<boolean> => {
+    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}), ...(steal ? { steal } : {}) });
     describeRole(); showMembership();
     store.set(slot => ({ ...slot, beatAt: now() }));
     await refreshCompletions();
@@ -212,15 +211,17 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
    * role then belongs to this session until it leaves or is removed.
    */
   const enter = async (ctx: ExtensionContext, team: string, role: string): Promise<string> => {
-    const plan = await session.plan(team, role, ctx.sessionManager.getSessionId());
+    // A role online in another terminal is taken from it, after the person confirms: that terminal leaves.
+    const plan = await session.plan(team, role, ctx.sessionManager.getSessionId(), { steal: true });
     const joined = session.current();
     const before = joined && (joined.team !== team || joined.role !== role) ? ` You leave ${joined.team} (${joined.role}) first, and that role is freed.` : '';
     const bound = 'The role stays bound to this Pi session until you leave or are removed.';
     const question = plan.create ? [`Create team ${team} and join as ${role}?`, `You will be its admin. ${bound}${before}`]
-      : plan.takeFrom ? [`Take over ${role} in ${team}?`, `${role} belongs to the Pi session in ${plan.takeFrom}, which is offline. It moves to this session with its history; that session will not get it back.${before}`]
+      : plan.takeFrom && plan.online ? [`Take over ${role} in ${team}?`, `${role} is online in the terminal at ${plan.takeFrom}. That terminal leaves the team, and the role moves to this session with its inbox and history.${before}`]
+      : plan.takeFrom ? [`Take over ${role} in ${team}?`, `${role} belongs to the session in ${plan.takeFrom}, which is offline. It moves to this session with its history; that session will not get it back.${before}`]
       : [`Join ${team} as ${role}?`, `${bound}${before}`];
     if (ctx.hasUI && !await confirm(ctx, question[0]!, question[1]!)) return NOTHING_JOINED;
-    const created = await joinTeam(ctx, team, role, undefined, !!plan.takeFrom);
+    const created = await joinTeam(ctx, team, role, undefined, !!plan.takeFrom, !!plan.online);
     remember();
     return plan.takeFrom ? `Took over ${role} in team ${team}.` : `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
   };
@@ -465,7 +466,13 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       });
     }
     if (!store.get().timer) {
-      const timer = setInterval(() => { void queue(poll).catch(() => {}); }, options.pollMs ?? 1000);
+      // One poll at a time: under load a slow poll must not pile up others ahead of the
+      // commands, tool calls and activity writes that share the queue.
+      const timer = setInterval(() => {
+        if (store.get().polling) return;
+        store.set(slot => ({ ...slot, polling: true }));
+        void queue(poll).catch(() => {}).finally(() => store.set(slot => ({ ...slot, polling: false })));
+      }, options.pollMs ?? 1000);
       timer.unref();
       store.set(slot => ({ ...slot, timer }));
     }
