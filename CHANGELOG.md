@@ -1,3 +1,23 @@
+## [0.11.0](https://github.com/prjct-app/pi-team/compare/v0.10.1...v0.11.0) (2026-10-10)
+
+### Features
+
+* take over a role another terminal holds online ([a06affb](https://github.com/prjct-app/pi-team/commit/a06affb283aa3f9e3b897cd4fa70cfc4c3aa8f4f))
+
+### Bug Fixes
+
+* queue at most one poll at a time ([ce060f7](https://github.com/prjct-app/pi-team/commit/ce060f761681ff20b34b1178afe35f2c19207472))
+
+## [0.11.0](https://github.com/prjct-app/pi-team/compare/v0.10.1...v0.11.0) (2026-10-10)
+
+### Features
+
+* take over a role another terminal holds online ([a06affb](https://github.com/prjct-app/pi-team/commit/a06affb283aa3f9e3b897cd4fa70cfc4c3aa8f4f))
+
+### Bug Fixes
+
+* queue at most one poll at a time ([ce060f7](https://github.com/prjct-app/pi-team/commit/ce060f761681ff20b34b1178afe35f2c19207472))
+
 ## [0.10.1](https://github.com/prjct-app/pi-team/compare/v0.10.0...v0.10.1) (2026-10-09)
 
 ### Bug Fixes
