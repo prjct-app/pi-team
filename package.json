@@ -71,6 +71,7 @@
     "CHANGELOG.md"
   ],
   "dependencies": {
-    "@prjct.app/pi-tui-kit": "^0.3.5"
+    "@prjct.app/pi-tui-kit": "^0.3.5",
+    "@prjct.app/team-core": "^0.1.0"
   }
 }

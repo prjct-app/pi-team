@@ -1,5 +1,5 @@
 import { SYMBOL, ago, type PanelAction, type PanelItem, type PanelSpec, type Tone } from '@prjct.app/pi-tui-kit';
-import type { TeamEvent, TeamOverview, Teammate } from './session.ts';
+import type { TeamEvent, TeamOverview, Teammate } from '@prjct.app/team-core';
 
 /** Everything the panel shows: every team on disk, its members and its timeline. */
 export type TeamSnapshot = {

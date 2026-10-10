@@ -4,10 +4,7 @@ import { Container, Text } from '@earendil-works/pi-tui';
 import { Type } from 'typebox';
 import { SYMBOL, brand, openPanel, row, setMode, type Complete, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
-import { TeamRuntime } from './runtime/team-runtime.ts';
-import { TeamPaths } from './storage/paths.ts';
-import { MESSAGE_KINDS, NAME_PATTERN, TeamSession, type Fate, type Incoming, type Saved, type Teammate } from './team/session.ts';
-import { ago, clean } from './team/text.ts';
+import { TeamRuntime, TeamPaths, MESSAGE_KINDS, NAME_PATTERN, TeamSession, ago, clean, type Fate, type Incoming, type Saved, type Teammate } from '@prjct.app/team-core';
 import { teamMessageRenderers } from './team/render.ts';
 import { mark, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 

@@ -1,6 +1,6 @@
 import type { AutocompleteItem } from '@earendil-works/pi-tui';
 import { completer, type CommandOption } from '@prjct.app/pi-tui-kit';
-import { TEAM_ID_PATTERN } from '../domain/team.ts';
+import { TEAM_ID_PATTERN } from '@prjct.app/team-core';
 
 export const TEAM_HELP = '/team join <team> <role> | send <role> <message> | rename <team-name> | rename-role <role> <new-role> | leave | remove <role> | delete | status | help';
 export type TeamCommand =

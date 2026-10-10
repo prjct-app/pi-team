@@ -398,9 +398,7 @@ test('the team timeline records joins, work, messages, refusals and leaves', asy
   const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend'); await b.command('join shop reviewer');
   await a.emit('before_agent_start', { prompt: 'Implement login', systemPrompt: 'base' });
-  const { TeamSession } = await import('../src/team/session.ts');
-  const { TeamRuntime } = await import('../src/runtime/team-runtime.ts');
-  const { TeamPaths } = await import('../src/storage/paths.ts');
+  const { TeamSession, TeamRuntime, TeamPaths } = await import('@prjct.app/team-core');
   const reader = new TeamSession(new TeamRuntime(new TeamPaths(a.root)));
   const seen = { types: [] as string[] };
   // Each terminal writes its own events; wait for backend's before reviewer acts, so the order is fixed.
