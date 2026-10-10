@@ -1,3 +1,9 @@
+## [0.11.1](https://github.com/prjct-app/pi-team/compare/v0.11.0...v0.11.1) (2026-10-10)
+
+### Bug Fixes
+
+* constrain team message generation to require body ([6dd1353](https://github.com/prjct-app/pi-team/commit/6dd13532f19efb5c4b7b749fb067291b9b6d7123))
+
 ## [0.11.0](https://github.com/prjct-app/pi-team/compare/v0.10.1...v0.11.0) (2026-10-10)
 
 ### Features
