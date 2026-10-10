@@ -3,6 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { InMemoryCredentialStore, validateToolArguments } from '@earendil-works/pi-ai';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installTeam, type InstallTeamOptions } from '../src/index.ts';
 import { parseTeamCommand } from '../src/commands/team-command.ts';
@@ -238,6 +240,47 @@ test('a kind the model made up is read as ours instead of failing the send', asy
   assert.deepEqual(tool.prepareArguments({ to: 'backend', kind: 'Request', body: 'take T1' }), { to: 'backend', kind: 'handoff', body: 'take T1' });
   const valid = { to: 'backend', kind: 'question', body: 'why?' };
   assert.equal(tool.prepareArguments(valid), valid);
+});
+
+test('the Codex request enforces the complete team message schema before generation', async t => {
+  const make = await setup(t);
+  const sender = await make('schema-sender');
+  await sender.command('join shop sender');
+  const tool = sender.tools.get('team_message');
+  const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null,
+    modelsStorePath: join(sender.root, 'schema-models.json'), refreshOnCreate: false });
+  // Only a synthetic account claim is needed to build the request. onPayload stops it before I/O.
+  const apiKey = `e30.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'schema-fixture' } })).toString('base64url')}.fixture`;
+  for (const supportsStrictMode of [true, false]) {
+    const provider = `schema-fixture-${supportsStrictMode}`;
+    runtime.registerProvider(provider, { name: provider, api: 'openai-codex-responses', apiKey,
+      baseUrl: 'http://127.0.0.1.invalid', models: [{ id: 'fixture', name: 'Fixture', api: 'openai-codex-responses',
+        reasoning: true, input: ['text'], contextWindow: 100_000, maxTokens: 1_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { supportsStrictMode } }] });
+    const payloads: any[] = [];
+    const response = await runtime.complete(runtime.getModel(provider, 'fixture')!, {
+      tools: [tool], messages: [{ role: 'user', content: 'Send infra the result.', timestamp: Date.now() }],
+    }, { onPayload: payload => { payloads.push(payload); throw new Error('Captured before network'); } });
+    assert.equal(response.stopReason, 'error');
+    assert.match(response.errorMessage ?? '', /Captured before network/);
+    assert.equal(payloads.length, 1);
+    const wire = payloads[0].tools.find((item: any) => item.name === 'team_message');
+    assert.ok(wire);
+    assert.equal(wire.strict, supportsStrictMode ? true : undefined);
+    assert.deepEqual(wire.parameters.required, ['to', 'kind', 'body']);
+    assert.equal(wire.parameters.additionalProperties, false);
+    assert.equal(wire.parameters.properties.body.type, 'string');
+    assert.equal(wire.parameters.properties.body.minLength, 1);
+  }
+  const missing = { to: 'infra', kind: 'info' };
+  assert.deepEqual(tool.prepareArguments(missing), missing, 'never invent a missing message');
+  assert.throws(() => validateToolArguments(tool, { type: 'toolCall', id: 'missing', name: 'team_message', arguments: missing }), /body/);
+  for (const key of ['body', 'message', 'text', 'content']) {
+    const body = 'Checks passed.\n\nExact evidence and final line.';
+    const prepared = tool.prepareArguments({ to: 'infra', kind: 'info', [key]: body });
+    assert.deepEqual(prepared, { to: 'infra', kind: 'info', body });
+    validateToolArguments(tool, { type: 'toolCall', id: 'present', name: 'team_message', arguments: prepared });
+  }
 });
 
 test('an offline or unknown teammate fails now instead of queuing', async (t) => {
