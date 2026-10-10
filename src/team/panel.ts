@@ -105,8 +105,8 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
   /** Only the admin, while in its own team, may rename it, rename or remove members, or delete it. */
   const amAdmin = (teamId: string | undefined): boolean =>
     inTeam(teamId) && !!cell.value.teams.find(entry => entry.id === teamId)?.mates.some(mate => mate.admin && mate.self);
-  /** An offline role of someone else: this terminal can join as it (a takeover, confirmed first). */
-  const takeable = (item: PanelItem | undefined): boolean => { const mate = mateOf(item); return !!mate && !mate.self && !mate.online; };
+  /** Someone else's role: this terminal can take it over (confirmed first). One online elsewhere leaves that terminal. */
+  const takeable = (item: PanelItem | undefined): boolean => { const mate = mateOf(item); return !!mate && !mate.self; };
   /** Who may remove the selected role: anyone clears an offline one, the admin also an online one. Nobody removes itself. */
   const removable = (item: PanelItem | undefined): boolean => {
     const mate = mateOf(item);
@@ -139,7 +139,7 @@ export function teamPanelSpec(ops: TeamPanelOps, initial: TeamSnapshot, select?:
     { key: 'n', label: 'New team', run: (_item, panel) => ask(panel, { action: 'create' }) },
     {
       // On an offline role: join as it. On a team you are not in: join it under a role you type.
-      key: 'a', label: item => takeable(item) ? `Join as ${mateOf(item)!.role}` : `Join ${teamOf(item)?.name ?? ''}`.trim(),
+      key: 'a', label: item => takeable(item) ? `${mateOf(item)!.online ? 'Take over' : 'Join as'} ${mateOf(item)!.role}` : `Join ${teamOf(item)?.name ?? ''}`.trim(),
       when: item => takeable(item) || (!!teamOf(item) && !inTeam(teamOf(item)?.id)),
       run: (item, panel) => {
         const team = teamOf(item)!;

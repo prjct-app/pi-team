@@ -174,8 +174,8 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     return left ? `Left team ${left.team}.` : 'Not in a team.';
   };
 
-  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved, takeover = false): Promise<boolean> => {
-    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}) });
+  const joinTeam = async (ctx: ExtensionContext, team: string, role: string, saved?: Saved, takeover = false, steal = false): Promise<boolean> => {
+    const { created } = await session.join({ team, role, sessionId: ctx.sessionManager.getSessionId(), cwd: ctx.cwd, ...(saved ? { saved } : {}), ...(takeover ? { takeover } : {}), ...(steal ? { steal } : {}) });
     describeRole(); showMembership();
     store.set(slot => ({ ...slot, beatAt: now() }));
     await refreshCompletions();
@@ -211,15 +211,17 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
    * role then belongs to this session until it leaves or is removed.
    */
   const enter = async (ctx: ExtensionContext, team: string, role: string): Promise<string> => {
-    const plan = await session.plan(team, role, ctx.sessionManager.getSessionId());
+    // A role online in another terminal is taken from it, after the person confirms: that terminal leaves.
+    const plan = await session.plan(team, role, ctx.sessionManager.getSessionId(), { steal: true });
     const joined = session.current();
     const before = joined && (joined.team !== team || joined.role !== role) ? ` You leave ${joined.team} (${joined.role}) first, and that role is freed.` : '';
     const bound = 'The role stays bound to this Pi session until you leave or are removed.';
     const question = plan.create ? [`Create team ${team} and join as ${role}?`, `You will be its admin. ${bound}${before}`]
-      : plan.takeFrom ? [`Take over ${role} in ${team}?`, `${role} belongs to the Pi session in ${plan.takeFrom}, which is offline. It moves to this session with its history; that session will not get it back.${before}`]
+      : plan.takeFrom && plan.online ? [`Take over ${role} in ${team}?`, `${role} is online in the terminal at ${plan.takeFrom}. That terminal leaves the team, and the role moves to this session with its inbox and history.${before}`]
+      : plan.takeFrom ? [`Take over ${role} in ${team}?`, `${role} belongs to the session in ${plan.takeFrom}, which is offline. It moves to this session with its history; that session will not get it back.${before}`]
       : [`Join ${team} as ${role}?`, `${bound}${before}`];
     if (ctx.hasUI && !await confirm(ctx, question[0]!, question[1]!)) return NOTHING_JOINED;
-    const created = await joinTeam(ctx, team, role, undefined, !!plan.takeFrom);
+    const created = await joinTeam(ctx, team, role, undefined, !!plan.takeFrom, !!plan.online);
     remember();
     return plan.takeFrom ? `Took over ${role} in team ${team}.` : `${created ? 'Created and joined' : 'Joined'} team ${team} as ${role}.`;
   };

@@ -256,12 +256,14 @@ test('an offline or unknown teammate fails now instead of queuing', async (t) =>
   assert.equal(b.sent.length, 0, 'Nothing sent while offline is delivered later');
 });
 
-test('/team send carries what the person typed, and a taken role is refused', async (t) => {
+test('/team send carries what the person typed, and a taken role stays put when the person declines', async (t) => {
   const make = await setup(t);
   const a = await make('s-a'); const b = await make('s-b');
   await a.command('join shop backend');
+  b.confirms.answer = false;
   await b.command('join shop backend');
-  assert.match(b.last(), /"backend" is online in another terminal \(\/work\/s-a\)/);
+  assert.equal(b.last(), 'Nothing joined.');
+  b.confirms.answer = true;
   await b.command('join shop docs');
   await b.command('send backend Please rebase on main');
   await until(() => a.sent.length === 1);
@@ -353,7 +355,8 @@ test('the panel lists every team with its members, and the timeline in detail', 
   assert.equal(key('a').when!(items[0]), false, 'Already in shop');
   assert.equal(key('a').when!(items[4]), true);
   assert.equal(key('a').when!(items[3]), true, 'An offline role can be joined as');
-  assert.equal(key('a').when!(items[1]), false, 'An online role cannot');
+  assert.equal(key('a').when!(items[1]), true, 'An online role can be taken over, after a confirmation');
+  assert.equal(key('a').when!(items[2]), false, 'Not your own');
   await key('m').run(items[1], control);
   await key('a').run(items[4], control);
   await key('a').run(items[3], control);
@@ -581,10 +584,10 @@ test('a role belongs to its session: closed, it comes back; nobody gets it witho
   const a = await make('s-a', entries);
   await a.command('join shop backend');
   const b = await make('s-b');
-  await b.command('join shop backend');
-  assert.match(b.last(), /online in another terminal/, 'An online role is never taken');
-  await a.emit('session_shutdown', { reason: 'quit' });
   b.confirms.answer = false;
+  await b.command('join shop backend');
+  assert.equal(b.last(), 'Nothing joined.', 'An online role is taken only when the person confirms');
+  await a.emit('session_shutdown', { reason: 'quit' });
   await b.command('join shop backend');
   assert.equal(b.last(), 'Nothing joined.');
   const again = await make('s-a', entries);
@@ -682,4 +685,15 @@ test('a team nobody is online in can be deleted by anyone; a live one only by it
   panels[0].handleInput('d');
   await until(() => panels.length === 2);
   assert.match(b.notices.join('\n'), /Deleted team shop/);
+});
+
+test('taking a role another terminal holds online moves it here; that terminal is told and leaves', async (t) => {
+  const make = await setup(t);
+  const a = await make('s-a'); const b = await make('s-b');
+  await a.command('join shop backend');
+  await b.command('join shop backend');
+  assert.equal(b.last().split('\n')[0], 'Took over backend in team shop.');
+  assert.equal(b.status.text, 'team shop · backend');
+  await until(() => a.notices.some(n => /backend in shop was taken over by the Pi session in \/work\/s-b/.test(n)));
+  assert.equal(a.status.text, undefined);
 });
