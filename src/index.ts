@@ -45,6 +45,8 @@ type Slot = {
   readonly closed: boolean;
   readonly toolsRegistered: boolean;
   readonly beatAt: number;
+  /** A poll is queued or running: the timer does not queue another behind it. */
+  readonly polling?: boolean;
   readonly focus?: string;
   readonly teams: readonly string[];
   readonly roles: readonly string[];
@@ -462,7 +464,13 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       });
     }
     if (!store.get().timer) {
-      const timer = setInterval(() => { void queue(poll).catch(() => {}); }, options.pollMs ?? 1000);
+      // One poll at a time: under load a slow poll must not pile up others ahead of the
+      // commands, tool calls and activity writes that share the queue.
+      const timer = setInterval(() => {
+        if (store.get().polling) return;
+        store.set(slot => ({ ...slot, polling: true }));
+        void queue(poll).catch(() => {}).finally(() => store.set(slot => ({ ...slot, polling: false })));
+      }, options.pollMs ?? 1000);
       timer.unref();
       store.set(slot => ({ ...slot, timer }));
     }
