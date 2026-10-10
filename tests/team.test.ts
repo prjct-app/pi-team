@@ -134,7 +134,7 @@ test('two terminals join by name, see each other working, and a message arrives 
   assert.match(a.tools.get('team_message').description, /Every message wakes an idle teammate/);
   // Activity is written by backend's own terminal; reviewer sees it once it lands.
   const seen = { text: '' };
-  await until(() => /◆ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), 2000, async () => {
+  await until(() => /◆ backend {2}working \d+s · Implement the login endpoint/.test(seen.text), undefined, async () => {
     seen.text = (await b.tool('team_peers', {})).content[0].text;
   });
 
@@ -406,11 +406,11 @@ test('the team timeline records joins, work, messages, refusals and leaves', asy
   // Each terminal writes its own events; wait for backend's before reviewer acts, so the order is fixed.
   const shopId = (await reader.findTeam('shop'))!;
   assert.match(shopId, /^t-[0-9a-f-]{36}$/, 'Teams are stored by UUID, not by name');
-  await until(() => seen.types.includes('working'), 2000, async () => { seen.types = (await reader.events(shopId)).map(event => event.type); });
+  await until(() => seen.types.includes('working'), undefined, async () => { seen.types = (await reader.events(shopId)).map(event => event.type); });
   await b.tool('team_message', { to: 'backend', kind: 'question', body: 'Which code?' });
   await b.tool('team_message', { to: 'docs', kind: 'info', body: 'hi' }).catch(() => {});
   await a.command('leave');
-  await until(() => seen.types.includes('left'), 2000, async () => {
+  await until(() => seen.types.includes('left'), undefined, async () => {
     seen.types = (await reader.events(shopId)).map(event => `${event.type}`);
   });
   const events = await reader.events(shopId);
