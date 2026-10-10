@@ -130,6 +130,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     pi.registerTool({
       name: 'team_message', label: 'Message a teammate',
       description: `${identity}Send a message to an online teammate by role. `
+        + 'Every call must include body with the complete message text, alongside to and kind. '
         + 'info for findings or answers, question to ask, handoff to transfer work. Every message wakes an idle teammate or steers a busy one, '
         + 'so do not send one only to acknowledge or to say you received a message. '
         + 'The receipt confirms inbox submission, not that the recipient read it or completed the work. Replies arrive in this conversation. '
@@ -137,8 +138,10 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48, description: 'The teammate role (see team_peers).' }),
         kind: StringEnum(MESSAGE_KINDS),
-        body: Type.String({ minLength: 1 }),
+        body: Type.String({ minLength: 1, description: 'The complete message text to send. Required in every call.' }),
       }, { additionalProperties: false }),
+      // Enforce required fields during generation where supported, before local validation.
+      constrainedSampling: { type: 'json_schema', strict: 'prefer' },
       /** `kind: "answer"` and the like are information, not a failed send. */
       prepareArguments: (raw: unknown) => {
         const args = raw && typeof raw === 'object' ? raw as Record<string, unknown> : undefined;
