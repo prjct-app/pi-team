@@ -12,7 +12,7 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 
 ## Messaging model
 
-`src/team/session.ts` (`TeamSession`) holds one terminal's membership and does no queuing of work:
+`TeamSession` (from `@prjct.app/team-core`) holds one terminal's membership and does no queuing of work:
 
 - `send` resolves the role and **refuses offline recipients**. It returns `submitted` with the message ID only after the durable inbox write; this does not confirm reading or completed work. Messages use kinds `info | question | handoff` and a 10-minute TTL. There is no request/reply correlation.
 - `receive` claims, reads and finishes each pending message exactly once, in creation order.
@@ -36,7 +36,7 @@ The admin is the creator's member ID, stored in the profile. Only the admin may 
 
 ## Transport
 
-`src/runtime` and `src/storage` provide the durable transport: team and member records, presence leases, per-member inboxes, delivery leases and receipts, with strict schemas, byte bounds, private permissions, symlink checks, locks and atomic writes. Members join as `external`. Rejoining a role keeps its member ID and bumps its generation. A live role cannot be taken by a second terminal. The request/reply and resource-lease services remain in the transport, but the extension does not use them.
+The durable transport lives in [`@prjct.app/team-core`](https://github.com/prjct-app/team-core), a plain npm dependency shared with the Claude Code team mod, so every client writes the same format with the same locks: team and member records, presence leases, per-member inboxes, delivery leases and receipts, with strict schemas, byte bounds, private permissions, symlink checks, locks and atomic writes. Members join as `external`. Rejoining a role keeps its member ID and bumps its generation. A live role cannot be taken by a second terminal. The request/reply and resource-lease services remain in the transport, but the extension does not use them.
 
 ## Removed
 

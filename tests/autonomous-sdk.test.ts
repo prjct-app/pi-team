@@ -6,9 +6,7 @@ import { test } from 'node:test';
 import { createAssistantMessageEventStream, InMemoryCredentialStore, type AssistantMessage } from '@earendil-works/pi-ai';
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { installTeam } from '../src/index.ts';
-import { TeamSession } from '../src/team/session.ts';
-import { TeamRuntime } from '../src/runtime/team-runtime.ts';
-import { TeamPaths } from '../src/storage/paths.ts';
+import { TeamSession, TeamRuntime, TeamPaths } from '@prjct.app/team-core';
 
 const until = async (predicate: () => boolean) => {
   const deadline = Date.now() + 8_000;
