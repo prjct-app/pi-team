@@ -5,7 +5,7 @@
 `src/index.ts` registers `/team` and the inactive `team_peers` and `team_message` definitions at startup. The public `registerToolRenderer` hook supplies a compact renderer even for historical calls before joining. At startup it creates no team records and leaves the prompt unchanged. While the terminal is joined:
 
 - the two tools are active, and they are removed again on leave;
-- one persisted message records the role on membership changes; `before_agent_start` records the prompt as the terminal's focus;
+- the tool description carries identity and working instructions; `before_agent_start` records the prompt as the terminal's focus;
 - a poll loop (1 s) receives messages, and every 5 s it renews presence.
 
 Membership is persisted with `pi.appendEntry('team-membership', …)`, which is free and never enters model context. It is restored on `session_start`. On `session_shutdown` the role is released, so a reload can take it back right away.
@@ -19,6 +19,14 @@ Membership is persisted with `pi.appendEntry('team-membership', …)`, which is 
 - `setActivity` / `teammates` publish and read `teams/<team>/activity/<member>.json` (`working | idle`, since, focus) next to the presence lease, so `/team` and `team_peers` show where each terminal is.
 
 `index.ts` delivers every message kind with the public Pi `sendMessage` API. A busy terminal receives steering with `triggerTurn: true`. For an idle batch, earlier messages are appended with `followUp` and no trigger, then the last opens one turn. `nextTurn` is reserved for passive status text because it waits for interactive input. The role is part of the `team_message` description, registered again on join and rename, so it survives compaction and automated turns without a context message. Gating wakes by kind was tried in 0.10.0 and reverted: agents report results as info, and teams stalled. No wake counter, rate window, or held-message queue blocks continuation.
+
+## Working instructions
+
+`src/team/instructions.ts` supplies the shared working instructions alongside the joined identity in the tool description. Every joined terminal receives them, including a restored session. They preserve the user's objective and assigned task across incoming messages, distinguish the responsibilities and evidence expected of different functions, and keep authorization tied to its original scope. Roles remain user-assigned; the extension does not infer permissions from aliases or treat the team admin as the delivery coordinator.
+
+Members are instructed to investigate uncertainty, support blockers with an applicable requirement or concrete evidence, and continue unaffected work. An agent-authored ticket or relay cannot manufacture a new policy. A condition on merge or deployment is not automatically extended to preparation or local implementation. Coordinators check proposed blockers and retain qualifiers such as static review, tested revision, environment, and unverified behavior when consolidating results.
+
+These are model-facing process instructions. They introduce no message classifier, action gate, new approval workflow, or modification of received text. Transport and SDK tests verify that the instructions reach automatic turns and survive membership restoration; they do not prove that a model will always follow them.
 
 ## Panel and timeline
 

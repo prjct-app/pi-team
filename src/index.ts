@@ -6,6 +6,7 @@ import { SYMBOL, brand, openPanel, row, setMode, type Complete, repairToolArgs }
 import { commandCompletions, parseTeamCommand, TEAM_HELP } from './commands/team-command.ts';
 import { TeamRuntime, TeamPaths, MESSAGE_KINDS, NAME_PATTERN, TeamSession, ago, clean, type Fate, type Incoming, type Saved, type Teammate } from '@prjct.app/team-core';
 import { teamMessageRenderers } from './team/render.ts';
+import { TEAM_WORKING_INSTRUCTIONS } from './team/instructions.ts';
 import { mark, memberItemId, teamItemId, teamPanelSpec, type TeamIntent, type TeamPanelOps, type TeamSnapshot } from './team/panel.ts';
 
 export type InstallTeamOptions = {
@@ -205,7 +206,7 @@ export function installTeam(pi: ExtensionAPI, options: InstallTeamOptions = {}):
     pi.sendMessage({ customType: IDENTITY, content: text, display: false }, { triggerTurn: false, deliverAs: 'followUp' });
   };
   const identityText = (team: string, role: string): string =>
-    `You are "${role}" in team "${team}", one of several independent Pi terminals. `;
+    `You are "${role}" in team "${team}", one of several independent Pi terminals.\n\n${TEAM_WORKING_INSTRUCTIONS}\n\n`;
   /** Join, remember it in the session, and say so. */
   const remember = (): void => { const saved = session.saved(); if (saved) pi.appendEntry<Membership>(ENTRY, saved); };
   /**
