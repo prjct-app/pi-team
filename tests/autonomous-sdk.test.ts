@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { createAssistantMessageEventStream, InMemoryCredentialStore, type AssistantMessage } from '@earendil-works/pi-ai';
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { installTeam } from '../src/index.ts';
+import { TEAM_WORKING_INSTRUCTIONS } from '../src/team/instructions.ts';
 import { TeamSession, TeamRuntime, TeamPaths } from '@prjct.app/team-core';
 
 const until = async (predicate: () => boolean) => {
@@ -75,6 +76,9 @@ test('public Pi SDK receives answers, batches, and busy steering without a typed
   await new Promise(resolve => setTimeout(resolve, 350));
   gate.release!();
   await until(() => captures.some(text => text.includes('BUSY_ANSWER') && text.includes('BUSY_HANDOFF')) && session.isIdle);
+  const instructionsInJson = JSON.stringify(TEAM_WORKING_INSTRUCTIONS).slice(1, -1);
+  assert.ok(captures.every(text => text.includes(instructionsInJson)),
+    'every model request, including automatic replies, batches and busy steering, receives the working instructions');
   assert.deepEqual(errors, []);
   assert.equal(session.pendingMessageCount, 0);
 });
