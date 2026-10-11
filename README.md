@@ -49,12 +49,14 @@ Team and role names are 1–48 lowercase letters, digits or hyphens, starting wi
 
 ## Agent tools
 
-While joined, the agent gets two tools and one context message that says who it is. The message is written once per change (join, rename, leave), so it survives automated turns and never edits the system prompt:
+While joined, the agent gets two tools. Its identity and working instructions live in the `team_message` description, refreshed on join, rename, and session restoration, so they remain available during automated turns and after compaction without editing the system prompt:
 
 - `team_peers` lists the other terminals with their live activity.
 - `team_message { to, kind: info | question | handoff, body }` sends a message.
 
 The tool describes submission separately from reading or completing work. It encourages useful messages in the team's working language, with the result, blocker or action first. The model decides when to coordinate; independent work can continue while replies arrive. When you leave, both tools become inactive and a last message says the team context no longer applies.
+
+The working instructions tell each member to preserve the shared objective and its assigned task, follow the responsibilities of its function, and act within existing authorization. Concerns need evidence relevant to the affected action before they become blockers; a teammate's assumption or an agent-written comment does not create a new approval requirement. Coordinators check proposed blockers and preserve the limits of each specialist's evidence when reporting progress. These are instructions to the model, not an automatic permission system or a guarantee of model behavior.
 
 The transcript shows one compact row such as `✓ TEAM → lead    info · sent`. Expanding it shows the original message as wrapped text, without a JSON wrapper or repeated receipt instructions. Renderers are registered at startup, so historical calls stay readable before joining a team or after leaving it.
 
