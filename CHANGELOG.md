@@ -1,3 +1,9 @@
+## [0.11.2](https://github.com/prjct-app/pi-team/compare/v0.11.1...v0.11.2) (2026-10-11)
+
+### Bug Fixes
+
+* ground team coordination in assigned scope and evidence ([117a590](https://github.com/prjct-app/pi-team/commit/117a5902168508778ce672c51513de2d32008136))
+
 ## [0.11.1](https://github.com/prjct-app/pi-team/compare/v0.11.0...v0.11.1) (2026-10-10)
 
 ### Bug Fixes
