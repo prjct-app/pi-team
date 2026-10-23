@@ -4,7 +4,7 @@
 
 - npm name: `@prjct.app/pi-team`
 - Repository: [prjct-app/pi-team](https://github.com/prjct-app/pi-team)
-- Tested host: Pi `1.0.4`; Node.js `22.19+`
+- Tested host: Pi `1.0.4`; Node.js `22.23.4+`
 
 The npm name and repository name may differ. The package rename changed no
 runtime command names, event names, persisted entry types, or settings keys.
