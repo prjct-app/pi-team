@@ -8,7 +8,7 @@ You open the terminals and give each a role. Each one keeps its own session, mod
 
 ## Install
 
-Requires Pi **0.85.1** and Node.js **22.19+**.
+Requires Pi **0.85.1** and Node.js **22.23.4+**.
 
 ```sh
 pi install npm:@prjct.app/pi-team
